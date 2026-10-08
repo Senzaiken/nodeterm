@@ -8,16 +8,23 @@ import {
   outsidePressReleases,
   reclaimTarget,
   hoverTakesKeyboard,
-  pointerLeaveReleases,
+  pointerLeaveRearmsGuard,
+  focusDrivesGuard,
+  dwellBlursForeignTerminal,
   resolveFocusFollowsPointer
 } from './terminalFocusMode'
 
 /**
  * Issue #757 — "option to disable X Window focus-follows-pointer (Mac-style click to select what
  * UI element has the input focus)". A terminal node's keyboard used to follow the POINTER: a hover
- * dwell took it, leaving the node took it away. `settings.terminalFocusFollowsPointer` keeps that
- * (the default) or switches to click-to-focus, where the pointer decides nothing and the clicked
- * terminal keeps the keyboard until the user clicks somewhere else.
+ * dwell took it, leaving the node took it away. `settings.terminalFocusFollowsPointer` keeps the
+ * hover dwell (the default) or switches to click-to-focus, where the pointer decides nothing and the
+ * clicked terminal keeps the keyboard until the user clicks somewhere else.
+ *
+ * Since then the default became SLOPPY focus: the dwell still takes the keyboard, but leaving the
+ * node no longer takes it away — it stays until another node takes it (a dwell, a click) or the
+ * user clicks elsewhere. Typing into a terminal while the mouse rests on the canvas no longer
+ * silently stops working.
  */
 describe('terminal focus mode (#757)', () => {
   it('defaults to focus-follows-pointer, so nobody’s terminal changes behaviour on upgrade', () => {
@@ -42,12 +49,42 @@ describe('terminal focus mode (#757)', () => {
     })
   })
 
-  describe('pointerLeaveReleases', () => {
-    it('takes the keyboard away on mouseleave only while focus follows the pointer', () => {
-      expect(pointerLeaveReleases(true)).toBe(true)
-      // Click-to-focus: the pointer wandering to another card, the canvas or a second display
-      // must leave the typed-into terminal exactly as it is.
-      expect(pointerLeaveReleases(false)).toBe(false)
+  describe('pointerLeaveRearmsGuard', () => {
+    it('re-arms the guard on mouseleave only while focus follows the pointer', () => {
+      // The guard is a POINTER contract in that mode: a pass-over scroll pans the canvas until the
+      // next dwell, so leaving must put it back.
+      expect(pointerLeaveRearmsGuard(true)).toBe(true)
+      // Click to focus: the guard follows DOM focus, and the pointer wandering off changes nothing.
+      expect(pointerLeaveRearmsGuard(false)).toBe(false)
+    })
+  })
+
+  describe('focusDrivesGuard', () => {
+    it('lets focus changes arm and disarm the guard only in click to focus', () => {
+      expect(focusDrivesGuard(false)).toBe(true)
+      // Focus follows the pointer: the dwell, a click and mouseleave own the guard. A release that
+      // re-armed it would strand a pointer resting on the body behind an armed guard with no
+      // mouseenter coming to restart the dwell; a reclaim that dropped it would let a pass-over
+      // scroll reach tmux.
+      expect(focusDrivesGuard(true)).toBe(false)
+    })
+  })
+
+  describe('dwellBlursForeignTerminal', () => {
+    // Sloppy focus: the pointer leaving a terminal no longer takes its keyboard, so the dwell onto
+    // the NEXT node is what moves it. A node whose ⌘M view covers its xterm cannot take it, and
+    // without this the terminal the user came from would keep receiving keystrokes while another
+    // node reads as the active one.
+    it('takes the keyboard off another terminal when this node cannot take it itself', () => {
+      expect(dwellBlursForeignTerminal({ covered: true, activeIsForeignXterm: true })).toBe(true)
+    })
+
+    it('leaves it to focus() when the xterm is not covered (focusing it moves the keyboard anyway)', () => {
+      expect(dwellBlursForeignTerminal({ covered: false, activeIsForeignXterm: true })).toBe(false)
+    })
+
+    it('never blurs anything but another terminal (a sticky, an editor, a field keep their caret)', () => {
+      expect(dwellBlursForeignTerminal({ covered: true, activeIsForeignXterm: false })).toBe(false)
     })
   })
 
@@ -180,8 +217,17 @@ describe('terminal focus mode (#757)', () => {
       const src = read('src/renderer/nodes/TerminalNode.tsx')
       expect(src).toContain('useSettings((s) => s.settings.terminalFocusFollowsPointer)')
       expect(src).toContain('hoverTakesKeyboard(focusFollowsPointer)')
-      expect(src).toContain('pointerLeaveReleases(focusFollowsPointer)')
-      expect(src).toContain('useClickToFocus(!focusFollowsPointer,')
+      expect(src).toContain('pointerLeaveRearmsGuard(focusFollowsPointer)')
+      // Sloppy focus: DOM focus owns the keyboard in BOTH modes, so the hook always runs and only
+      // the guard is mode-dependent.
+      expect(src).toContain('useClickToFocus({')
+      expect(src).toContain('if (focusDrivesGuard(focusFollowsPointer)) setArmed(armed)')
+      expect(src).toContain('dwellBlursForeignTerminal({')
+      // The pointer leaving never takes the keyboard away: no blur, no release, in either mode.
+      const leave = src.slice(src.indexOf('const onBodyLeave = () => {'), src.indexOf('useClickToFocus({'))
+      expect(leave).not.toContain('blur()')
+      expect(leave).not.toContain('setActive(id, false)')
+      expect(leave).not.toContain('releaseFocus(')
       // A dwell already running when the setting is switched off must not still take the keyboard:
       // the timer re-reads the LIVE setting, and switching off cancels a pending dwell.
       expect(src).toContain('if (!hoverTakesKeyboard(focusFollowsPointerRef.current)) return')

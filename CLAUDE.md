@@ -1490,10 +1490,19 @@ session.
 - The xterm container is `nodrag nowheel`; a transparent **hover-guard** overlay sits on top
   until you dwell `settings.panHoverDelay` (so quick drag = move node, scroll = pan). After
   the dwell the guard is removed and xterm takes input. The header stays draggable.
-- **Click to focus** (`settings.terminalFocusFollowsPointer`, default ON = the dwell above; issue
-  #757, Settings → Behavior). Off, the pointer decides nothing: no dwell, and `mouseleave` no
-  longer blurs, re-arms or releases. A click (`HoverGuard` pointer events → `onGuardClick` → `enterNow`) or a "go to node" takes the
-  keyboard, and the node's active flag, presence focus AND guard then follow DOM focus. ONE hook
+- **Sloppy focus** (default, `settings.terminalFocusFollowsPointer` ON): the dwell above TAKES the
+  keyboard, and `mouseleave` only re-arms the guard — it never blurs the xterm or drops the active
+  flag / presence focus. The terminal keeps the keyboard until another node takes it (its dwell, a
+  click) or the user clicks elsewhere. This replaced strict focus-follows-mouse, where leaving the
+  node released everything and typing with the pointer resting on the canvas went nowhere. Release
+  follows DOM focus through the SAME hook click to focus uses (below), so a dwell onto a node whose
+  ⌘M view covers its xterm blurs the OTHER terminal's xterm (`dwellBlursForeignTerminal`) — else the
+  previous pane keeps eating keystrokes while another node reads as active. The guard stays a
+  POINTER contract in this mode: the hook's `setArmed` is a no-op here (`focusDrivesGuard`).
+- **Click to focus** (`settings.terminalFocusFollowsPointer` OFF; issue #757, Settings → Behavior):
+  the pointer decides nothing: no dwell, and `mouseleave` changes nothing. A click (`HoverGuard`
+  pointer events → `onGuardClick` → `enterNow`) or a "go to node" takes the keyboard, and the
+  node's active flag, presence focus AND guard then follow DOM focus. ONE hook
   owns all of it, `nodes/useClickToFocus.ts`, and it binds to the stable `.term-node` ROOT, never
   the React Flow wrapper: focus mode MOVES that root into the fullscreen surface
   (`surface.appendChild(root)`), so a listener or containment check captured on the wrapper went

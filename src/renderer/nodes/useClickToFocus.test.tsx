@@ -7,7 +7,8 @@ import { useClickToFocus, type ClickToFocusHost } from './useClickToFocus'
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 /**
- * Click-to-focus ownership (#757) against a real DOM shaped like a terminal node:
+ * Keyboard ownership (#757 click to focus, and sloppy focus-follows-pointer) against a real DOM
+ * shaped like a terminal node:
  *
  *   .react-flow__node (tabindex 0)
  *     .term-node                     ← the stable root; focus mode MOVES this element
@@ -91,12 +92,12 @@ describe('useClickToFocus', () => {
       reportFocus: vi.fn(() => calls.push('report')),
       releaseFocus: vi.fn(() => calls.push('release'))
     }
-    function Probe({ enabled }: { enabled: boolean }) {
-      useClickToFocus(enabled, host)
+    function Probe() {
+      useClickToFocus(host)
       return null
     }
     reactRoot = createRoot(container)
-    act(() => reactRoot.render(<Probe enabled />))
+    act(() => reactRoot.render(<Probe />))
   })
 
   afterEach(() => {
@@ -236,23 +237,24 @@ describe('useClickToFocus', () => {
     expect(calls).not.toContain('release')
   })
 
-  it('does nothing while focus follows the pointer', () => {
-    act(() =>
-      reactRoot.render(
-        (() => {
-          function Off() {
-            useClickToFocus(false, host)
-            return null
-          }
-          return <Off />
-        })()
-      )
-    )
-    guard.remove()
-    press(xterm)
-    host.active = true
-    press(outside)
-    expect(host.acknowledge).not.toHaveBeenCalled()
-    expect(calls).not.toContain('release')
+  it('keeps a terminal the pointer has left until the keyboard really goes elsewhere (sloppy focus)', () => {
+    // A hover dwell took the keyboard (the dwell is TerminalNode's; here it is the focus it causes).
+    act(() => xterm.focus())
+    expect(host.active).toBe(true)
+    calls.length = 0
+    // The pointer wanders off to the canvas: nothing about the keyboard may change.
+    act(() => {
+      body.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: outside }))
+      outside.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, relatedTarget: body }))
+    })
+    expect(document.activeElement).toBe(xterm)
+    expect(host.active).toBe(true)
+    expect(calls).toEqual([])
+    // Another terminal's dwell focuses ITS xterm: that, not the pointer leaving, releases this one.
+    const otherXterm = document.createElement('textarea')
+    outside.append(otherXterm)
+    act(() => otherXterm.focus())
+    expect(calls).toContain('release')
+    expect(calls).toContain('active:false')
   })
 })
