@@ -37,7 +37,7 @@ const ROWS = {
   panHover: { title: 'Pan-hover delay (ms)', keywords: ['pan', 'hover', 'delay', 'focus', 'guard'] },
   focusFollowsPointer: {
     title: 'Terminal focus follows pointer',
-    keywords: ['focus', 'hover', 'pointer', 'click', 'follows', 'x11', 'mouse', 'keyboard', 'terminal', 'mac']
+    keywords: ['focus', 'hover', 'pointer', 'click', 'follows', 'x11', 'sloppy', 'mouse', 'keyboard', 'terminal', 'mac']
   },
   doubleClick: { title: 'Double-click to focus', keywords: ['double', 'click', 'focus'] },
   focusZoom: {
@@ -211,7 +211,7 @@ export function BehaviorSection({ isActive }: { isActive: boolean }): React.JSX.
           label="Terminal focus follows pointer"
           description={
             settings.terminalFocusFollowsPointer
-              ? 'On: hovering a terminal for the pan-hover delay gives it the keyboard, and moving the pointer off it takes the keyboard away. Turn off for click to focus.'
+              ? 'On: hovering a terminal for the pan-hover delay gives it the keyboard. It keeps the keyboard when the pointer moves off — until you hover another terminal, or click another node, the empty canvas or a field. Turn off for click to focus.'
               : 'Off (click to focus): click a terminal to type in it. It keeps the keyboard until you click another node, the empty canvas or a field — moving the pointer away changes nothing.'
           }
           control={

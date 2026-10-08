@@ -30,8 +30,11 @@ export interface ClickToFocusHost {
 }
 
 /**
- * Click to focus (#757): the node's "I hold the keyboard" state follows DOM focus and deliberate
- * presses, never the pointer's position.
+ * The node's "I hold the keyboard" state follows DOM focus and deliberate presses, never the
+ * pointer's position. Born for click to focus (#757); since sloppy focus it runs in BOTH modes — a
+ * hover dwell only TAKES the keyboard, and losing it is this hook's job either way. In
+ * focus-follows-pointer mode the host's `setArmed` is a no-op (`focusDrivesGuard`): the guard
+ * belongs to the pointer there.
  *
  * ONE document capture `pointerdown` listener plus `focusin`/`focusout` on the node root. Earlier
  * versions also listened on the React Flow wrapper, captured once when the effect ran — and focus
@@ -50,11 +53,10 @@ export interface ClickToFocusHost {
  * Capture phase on the document, so React Flow's d3-drag (which stops mousedown at the wrapper) can
  * never hide a press. The focus decisions are the pure functions in `lib/terminalFocusMode.ts`.
  */
-export function useClickToFocus(enabled: boolean, host: ClickToFocusHost): void {
+export function useClickToFocus(host: ClickToFocusHost): void {
   const hostRef = useRef(host)
   hostRef.current = host
   useEffect(() => {
-    if (!enabled) return
     const h = () => hostRef.current
     const root = h().root()
     if (!root) return
@@ -177,5 +179,5 @@ export function useClickToFocus(enabled: boolean, host: ClickToFocusHost): void 
       root.removeEventListener('focusin', onFocusIn)
       root.removeEventListener('focusout', onFocusOut)
     }
-  }, [enabled])
+  }, [])
 }

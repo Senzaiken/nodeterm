@@ -10,14 +10,22 @@
  *
  * `settings.terminalFocusFollowsPointer` (default ON — the long-standing behaviour) picks the model:
  *
- * - **ON — focus follows the pointer.** Unchanged: hover dwell takes the keyboard, leaving the
- *   node gives it back.
+ * - **ON — focus follows the pointer, sloppily.** A hover dwell takes the keyboard, and the
+ *   terminal KEEPS it after the pointer leaves — until another node takes it (its own dwell, a
+ *   click) or the user clicks elsewhere. This used to be strict X11 focus-follows-mouse, where
+ *   `mouseleave` blurred the xterm and dropped the active flag and presence focus: typing into a
+ *   terminal while the mouse rested on the canvas silently went nowhere, and so did every reach for
+ *   the sidebar mid-prompt. Only the hover GUARD still follows the pointer here (leaving re-arms
+ *   it, so a pass-over scroll pans the canvas until the next dwell).
  * - **OFF — click to focus.** The pointer decides nothing. A click on the terminal (the guard's
  *   `onGuardClick` → `enterNow`, issue #87) or a "go to node" request takes the keyboard, and the
  *   terminal KEEPS it until focus really goes somewhere else: another node, the empty canvas
- *   (whose `onPaneClick` blurs the xterm textarea, issue #86), a text field. The node's active
- *   flag, presence focus and hover guard then follow that DOM focus instead of the pointer — see
- *   `focusLossOutcome`.
+ *   (whose `onPaneClick` blurs the xterm textarea, issue #86), a text field. The guard follows
+ *   DOM focus too.
+ *
+ * In BOTH modes the node's active flag and presence focus follow DOM focus, through
+ * `useClickToFocus` (named for #757, where it was born) — see `focusLossOutcome`. The modes differ
+ * only in how the keyboard is TAKEN (dwell or click) and in who owns the guard.
  *
  * Pure so the decisions are testable without a mounted xterm; `TerminalNode` owns the effects.
  */
@@ -37,11 +45,40 @@ export function hoverTakesKeyboard(focusFollowsPointer: boolean): boolean {
 }
 
 /**
- * Does the pointer leaving the body take the keyboard away (blur the xterm, re-arm the guard,
- * drop the active flag and presence focus)? Click-to-focus leaves all of that to `focusLossOutcome`.
+ * Does the pointer leaving the body re-arm the hover guard? Only while focus follows the pointer,
+ * where the guard is a pointer contract. It never takes the keyboard away, in either mode: the
+ * keyboard, the active flag and presence focus are released by `focusLossOutcome`, which follows
+ * where the KEYBOARD goes rather than where the mouse goes.
  */
-export function pointerLeaveReleases(focusFollowsPointer: boolean): boolean {
+export function pointerLeaveRearmsGuard(focusFollowsPointer: boolean): boolean {
   return focusFollowsPointer
+}
+
+/**
+ * Do DOM focus changes arm and disarm the hover guard (`useClickToFocus`'s `setArmed`)?
+ *
+ * Only in click to focus, where the guard has no other owner. While focus follows the pointer the
+ * dwell, a click and `mouseleave` own it, and focus moving would get it wrong both ways: a release
+ * while the pointer rests on the body (⌘K, a sidebar jump) would re-arm it with no `mouseenter`
+ * coming to restart the dwell, and a reclaim after a header drag would drop it while the pointer is
+ * elsewhere, so the next pass-over scroll would reach tmux instead of panning the canvas.
+ */
+export function focusDrivesGuard(focusFollowsPointer: boolean): boolean {
+  return !focusFollowsPointer
+}
+
+/**
+ * Should a hover dwell that has just made this node active blur the element holding the keyboard?
+ *
+ * With sloppy focus the dwell onto the NEXT node is what moves the keyboard: focusing its xterm
+ * takes it from the terminal the user came from. A node whose ⌘M view covers its xterm cannot take
+ * it (`focusXtermUnlessCovered`), so the previous terminal would keep receiving keystrokes while
+ * this node reads as the active one — typing into a pane nobody is looking at. Only ANOTHER
+ * terminal's xterm is blurred: a sticky, an editor or a text field keeps its caret, exactly as it
+ * did when `mouseleave` was what released a terminal.
+ */
+export function dwellBlursForeignTerminal(p: { covered: boolean; activeIsForeignXterm: boolean }): boolean {
+  return p.covered && p.activeIsForeignXterm
 }
 
 /** The slice of a node's root element this module reads. */
@@ -69,7 +106,7 @@ export interface FocusLossEvent {
   lostIsCoveredXterm: boolean
 }
 
-/** What a `focusout` inside the node means in click-to-focus mode. */
+/** What a `focusout` inside the node means (both modes since sloppy focus). */
 export type FocusLossOutcome =
   /** Nothing changed that the node must act on. */
   | 'keep'
@@ -79,7 +116,7 @@ export type FocusLossOutcome =
   | 'release'
 
 /**
- * Click to focus: what did a `focusout` inside this node mean?
+ * What did a `focusout` inside this node mean? (Born for click to focus; both modes use it now.)
  *
  * The one place the node's "I hold the keyboard" state is released in that mode, so it must tell
  * a real move from its look-alikes:
@@ -123,14 +160,15 @@ export interface OutsidePress {
 }
 
 /**
- * Click to focus: does a press ANYWHERE ELSE release a node that holds no DOM focus?
+ * Does a press ANYWHERE ELSE release a node that holds no DOM focus? (Both modes.)
  *
  * `focusLossOutcome` can only answer for a node that had focus to lose. Activity is also claimed
  * without it: a "go to node" while the ⌘M view covers the xterm (`enterNow` reports activity, but
  * `focusXtermUnlessCovered` deliberately leaves the hidden terminal unfocused) and Canvas's own
- * `setActive` on a sidebar or notification jump. With focus-follows-pointer, `mouseleave` cleaned
- * that up; with click to focus nothing did, and a stale active flag makes Canvas treat the node as
- * watched — its next finish never gets an unread dot — and leaves presence saying "working here".
+ * `setActive` on a sidebar or notification jump. Strict focus-follows-pointer had `mouseleave`
+ * clean that up; with click to focus, and now sloppy focus, nothing else does, and a stale active
+ * flag makes Canvas treat the node as watched — its next finish never gets an unread dot — and
+ * leaves presence saying "working here".
  *
  * So a press outside such a node is the user clicking elsewhere, which is the release #757 names.
  * A node that DOES hold focus is left to its own `focusout` (the press may not move focus at all —
@@ -141,7 +179,7 @@ export function outsidePressReleases(p: OutsidePress): boolean {
 }
 
 /**
- * Click to focus, `reclaim`: which element gets the keyboard back after a press on the node's own
+ * `reclaim`: which element gets the keyboard back after a press on the node's own
  * chrome? The one that lost it, when it is still inside the node and is not the xterm (the ⌘M
  * composer — the covered xterm cannot take focus, so falling back to it strands the keyboard on the
  * React Flow wrapper); otherwise the xterm, through `focusXtermUnlessCovered`.
@@ -151,10 +189,11 @@ export function reclaimTarget(p: { lostIsXterm: boolean; lostStillInNode: boolea
 }
 
 /**
- * Click to focus: does this press ACKNOWLEDGE the node (the `enterNow` routine — active flag,
- * `clearUnread`, presence, remember, and the xterm focused unless the ⌘M view covers it)?
+ * Does this press ACKNOWLEDGE the node (the `enterNow` routine — active flag, `clearUnread`,
+ * presence, remember, and the xterm focused unless the ⌘M view covers it)?
  *
- * Focus-follows-pointer acknowledges on every dwell. Click to focus has no dwell, so a deliberate
+ * Focus-follows-pointer acknowledges on every dwell, and a body press there is a dwell's worth of
+ * intent anyway (the guard is already down). Click to focus has no dwell, so a deliberate
  * primary press anywhere in the node BODY is the acknowledgement: on the xterm even when the guard is
  * already down (Codex round 3 — a finish that turned unread while the window was inactive could not
  * be cleared by clicking the terminal it belongs to), on the open ⌘M view, on its composer. Three

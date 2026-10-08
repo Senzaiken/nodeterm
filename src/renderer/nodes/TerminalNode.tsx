@@ -238,10 +238,13 @@ import { ContextMeter } from '../components/ContextMeter'
 import { isZoomModifierHeld } from '../lib/zoomModifier'
 import { HoverGuard } from './HoverGuard'
 import {
+  dwellBlursForeignTerminal,
+  focusDrivesGuard,
   hoverTakesKeyboard,
-  pointerLeaveReleases,
+  pointerLeaveRearmsGuard,
   resolveFocusFollowsPointer
 } from '../lib/terminalFocusMode'
+import { XTERM_INPUT_CLASS } from '../lib/keyContext'
 import { useClickToFocus } from './useClickToFocus'
 import { reparentKeepingFocus } from './reparentKeepingFocus'
 import { isHidden } from '../lib/ui-visibility'
@@ -5617,6 +5620,18 @@ export function TerminalNode({
         return
       }
       setArmed(false)
+      // Sloppy focus: this dwell, not the pointer leaving, takes the keyboard off the terminal the
+      // user came from — even when the ⌘M view leaves nothing here that could take it.
+      const held = document.activeElement
+      if (
+        held instanceof HTMLElement &&
+        dwellBlursForeignTerminal({
+          covered: mdModeRef.current,
+          activeIsForeignXterm: held.classList.contains(XTERM_INPUT_CLASS) && !rootRef.current?.contains(held)
+        })
+      ) {
+        held.blur()
+      }
       focusXtermUnlessCovered(termRef.current, mdModeRef.current)
       useTerminalFocus.getState().remember(id)
       useAgentStatus.getState().setActive(id, true)
@@ -5630,21 +5645,21 @@ export function TerminalNode({
   }
   const onBodyLeave = () => {
     if (dwellRef.current) clearTimeout(dwellRef.current)
-    // Click to focus (#757): the pointer wandering off — to another card, the sidebar, a second
-    // display — leaves the terminal exactly as it is. It keeps the keyboard, the guard stays down
-    // and the node stays active; all of that is released by the focus-loss listener below, which
-    // follows where the KEYBOARD goes rather than where the mouse goes.
-    if (!pointerLeaveReleases(focusFollowsPointer)) return
-    setArmed(true)
-    termRef.current?.blur()
-    useAgentStatus.getState().setActive(id, false)
-    presence.releaseFocus(id)
+    // The pointer wandering off — to the canvas, another card, the sidebar, a second display —
+    // never takes the keyboard away, in either mode: the terminal keeps it and the node stays
+    // active until another node takes it or the user clicks elsewhere (sloppy focus). That release
+    // is the focus-loss listener's below, which follows where the KEYBOARD goes rather than where
+    // the mouse goes. Strict focus-follows-pointer used to blur here, so typing with the mouse
+    // resting off the node silently went nowhere. Only the guard still follows the pointer while
+    // focus follows it: a pass-over scroll must pan the canvas until the next dwell.
+    if (pointerLeaveRearmsGuard(focusFollowsPointer)) setArmed(true)
   }
-  // Click to focus (#757): who holds the keyboard follows DOM focus and deliberate presses, not the
-  // pointer — the whole mechanism, its measurements and its refusals live in `useClickToFocus`.
-  // Every callback is read live from this render; the listeners are bound once per mode switch, to
-  // the node root, which is the one element that survives focus mode's reparent.
-  useClickToFocus(!focusFollowsPointer, {
+  // Who holds the keyboard follows DOM focus and deliberate presses, not the pointer, in BOTH modes
+  // — the whole mechanism, its measurements and its refusals live in `useClickToFocus` (#757). The
+  // modes differ in who owns the guard: focus here only in click to focus, the pointer otherwise.
+  // Every callback is read live from this render; the listeners are bound once, to the node root,
+  // which is the one element that survives focus mode's reparent.
+  useClickToFocus({
     id,
     root: () => rootRef.current,
     xtermTextarea: () => termRef.current?.textarea,
@@ -5652,7 +5667,9 @@ export function TerminalNode({
     reparenting: () => reparentingRef.current,
     acknowledge: () => enterNow(),
     focusXterm: () => focusXtermUnlessCovered(termRef.current, mdModeRef.current),
-    setArmed,
+    setArmed: (armed) => {
+      if (focusDrivesGuard(focusFollowsPointer)) setArmed(armed)
+    },
     remember: () => useTerminalFocus.getState().remember(id),
     isActive: () => useAgentStatus.getState().activeId === id,
     setActive: (active) => useAgentStatus.getState().setActive(id, active),
