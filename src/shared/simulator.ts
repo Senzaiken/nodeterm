@@ -417,3 +417,27 @@ export function normalizeSimulatorAction(raw: unknown): SimulatorAction | null {
       return null
   }
 }
+
+// ── "Is anyone getting my touches?" ─────────────────────────────────────────────────────────────
+//
+// A device takes input from its FIRST HID client only (measured on Xcode 27): while DeviceHub shows
+// a device, our touches are dropped without an error, and the node keeps streaming frames, so it
+// looks alive and ignores the user. Nothing reports the drop, so the node watches for its symptom:
+// the helper sends a frame only when the screen changed, so a touch followed by no frame at all
+// changed nothing. One such touch proves little (a tap on an inert spot changes nothing either), so
+// the hint waits for several in a row, and any touch that IS answered starts the count again.
+
+/** How long after a touch lifts the screen gets to change before the touch counts as unanswered. */
+export const TOUCH_ANSWER_MS = 1500
+/** Unanswered touches in a row before the node says something may be holding the input. */
+export const UNANSWERED_TOUCHES_FOR_HINT = 3
+
+export const INPUT_HELD_HINT =
+  'Touches are not changing the screen. If DeviceHub is showing this simulator, it keeps the touch input: pick another device in DeviceHub or quit it.'
+
+/** The count after one more touch, and whether the hint should now show. */
+export function afterTouch(count: number, answered: boolean): { count: number; hint: boolean } {
+  if (answered) return { count: 0, hint: false }
+  const next = count + 1
+  return { count: next, hint: next >= UNANSWERED_TOUCHES_FOR_HINT }
+}

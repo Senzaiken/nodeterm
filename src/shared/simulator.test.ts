@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  afterTouch,
+  UNANSWERED_TOUCHES_FOR_HINT,
   ORIENTATION_DEGREES,
   ORIENTATION_PURPLE,
   displayLabel,
@@ -194,5 +196,22 @@ describe('normalizeSimulatorAction', () => {
     expect(normalizeSimulatorAction({ a: 'install', path: 'relative/My.app' })).toBeNull()
     expect(normalizeSimulatorAction({ a: 'add-media', paths: [] })).toBeNull()
     expect(normalizeSimulatorAction({ a: 'erase-everything' })).toBeNull()
+  })
+})
+
+describe('afterTouch', () => {
+  it('shows the hint only after several unanswered touches in a row', () => {
+    let s = { count: 0, hint: false }
+    for (let i = 1; i < UNANSWERED_TOUCHES_FOR_HINT; i++) {
+      s = afterTouch(s.count, false)
+      expect(s.hint).toBe(false)
+    }
+    s = afterTouch(s.count, false)
+    expect(s.hint).toBe(true)
+  })
+  it('an answered touch starts the count again and hides the hint', () => {
+    const s = afterTouch(UNANSWERED_TOUCHES_FOR_HINT + 4, true)
+    expect(s).toEqual({ count: 0, hint: false })
+    expect(afterTouch(s.count, false).hint).toBe(false)
   })
 })

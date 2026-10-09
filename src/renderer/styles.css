@@ -17848,6 +17848,33 @@ body.focus-mode .dock:hover {
   pointer-events: none;
 }
 
+.sim-node__hint {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  top: 8px;
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 6px 8px;
+  border-radius: 7px;
+  font-size: 11px;
+  line-height: 1.35;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.72);
+}
+.sim-node__hint-close {
+  flex: none;
+  padding: 0 2px;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
 .sim-node__rec {
   height: 22px;
   padding: 0 7px;

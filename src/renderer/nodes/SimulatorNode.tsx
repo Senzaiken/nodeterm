@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { NodeResizer, useReactFlow, type NodeProps } from '@xyflow/react'
 import {
+  afterTouch,
+  INPUT_HELD_HINT,
+  TOUCH_ANSWER_MS,
   ORIENTATION_DEGREES,
   ORIENTATION_PURPLE,
   displayLabel,
@@ -70,6 +73,12 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
   const [prompt, setPrompt] = useState<PromptSpec | null>(null)
   const [confirm, setConfirm] = useState<ConfirmSpec | null>(null)
   const [dropping, setDropping] = useState(false)
+  /** "DeviceHub may be holding the input": shown after several touches in a row changed nothing. */
+  const [inputHint, setInputHint] = useState(false)
+  /** Frames received so far; a touch is answered when this moves after it lifts. */
+  const framesSeen = useRef(0)
+  const unanswered = useRef(0)
+  const touchTimers = useRef(new Set<ReturnType<typeof setTimeout>>())
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const screenRef = useRef<HTMLDivElement>(null)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -128,6 +137,7 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
     let decoding = 0
     const offFrame = api.simulator.onFrame(id, (f) => {
       if (!live) return
+      framesSeen.current++
       const seq = ++decoding
       void createImageBitmap(new Blob([f.jpeg as BlobPart], { type: 'image/jpeg' })).then(
         (bitmap) => {
@@ -251,6 +261,32 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
     [api, id]
   )
 
+  // A touch that lifted with no frame after it changed nothing on the screen (see afterTouch).
+  // Counted from the finger going DOWN, so a drag that moved the screen while held is answered.
+  const touchStartFrames = useRef(0)
+  const watchTouch = useCallback(() => {
+    const before = touchStartFrames.current
+    const t = setTimeout(() => {
+      touchTimers.current.delete(t)
+      const r = afterTouch(unanswered.current, framesSeen.current !== before)
+      unanswered.current = r.count
+      setInputHint(r.hint)
+    }, TOUCH_ANSWER_MS)
+    touchTimers.current.add(t)
+  }, [])
+  useEffect(() => {
+    const timers = touchTimers.current
+    return () => {
+      for (const t of timers) clearTimeout(t)
+      timers.clear()
+    }
+  }, [])
+  // A different device starts with a clean slate.
+  useEffect(() => {
+    unanswered.current = 0
+    setInputHint(false)
+  }, [udid])
+
   const rotate = useCallback(
     (dir: 'left' | 'right') => {
       const next = rotateOrientation(orientationRef.current, dir)
@@ -280,6 +316,7 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
     if (!p) return
     e.currentTarget.setPointerCapture(e.pointerId)
     pressed.current = p
+    touchStartFrames.current = framesSeen.current
     send({ t: 'down', ...p })
     e.preventDefault()
   }
@@ -303,6 +340,7 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
     const p = ratioAt(e.clientX, e.clientY) ?? (box && frameSize ? clampedRatio(e.clientX, e.clientY, box, frameSize) : pressed.current)
     pressed.current = null
     send({ t: 'up', ...p })
+    watchTouch()
   }
 
   // The scroll wheel becomes a swipe: a finger that goes down where the pointer is, follows the
@@ -315,6 +353,7 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
     if (!wheel.current) {
       const p = ratioAt(e.clientX, e.clientY)
       if (!p) return
+      touchStartFrames.current = framesSeen.current
       send({ t: 'down', ...p })
       wheel.current = { ...p, timer: setTimeout(() => undefined, 0) }
     }
@@ -326,6 +365,7 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
     w.timer = setTimeout(() => {
       send({ t: 'up', x: w.x, y: w.y })
       wheel.current = null
+      watchTouch()
     }, WHEEL_END_MS)
   }
 
@@ -667,6 +707,22 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
             </div>
           )}
           {phase === 'live' && message && <div className="sim-node__note">{message}</div>}
+          {phase === 'live' && inputHint && (
+            <div className="sim-node__hint" role="status">
+              <span>{INPUT_HELD_HINT}</span>
+              <button
+                className="sim-node__hint-close"
+                aria-label="Dismiss"
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={() => {
+                  unanswered.current = 0
+                  setInputHint(false)
+                }}
+              >
+                ×
+              </button>
+            </div>
+          )}
           {dropping && <div className="sim-node__drop">Drop a .app to install · photos or videos to add</div>}
         </div>
         {toast && <div className={`sim-node__toast${toast.error ? ' sim-node__toast--error' : ''}`}>{toast.text}</div>}
