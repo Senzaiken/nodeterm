@@ -299,7 +299,43 @@ function referencedEnv(...values: unknown[]): string[] {
   return names
 }
 
-export async function startRun(nodeId: unknown, rawConfig: unknown): Promise<RunStartResult> {
+/**
+ * Does the app's own Dart code read `appFlavor`? `flutter attach` has no `--flavor`, and Flutter
+ * REFUSES a hand-passed `FLUTTER_APP_FLAVOR` define (flutter_command.dart,
+ * `_ensureReservedDartDefineIsUnset`), so after an attach + hot restart `appFlavor` falls back to
+ * the pubspec's default flavor — the wrong answer for an app that branches on it. Bounded scan of
+ * `lib/` (the app's code; packages are not the app's choice). A read failure answers "no".
+ */
+async function readsAppFlavor(dir: string): Promise<boolean> {
+  const stack = [path.join(dir, 'lib')]
+  let files = 0
+  while (stack.length && files < 4000) {
+    const d = stack.pop() as string
+    let entries: import('node:fs').Dirent[]
+    try {
+      entries = await readdir(d, { withFileTypes: true })
+    } catch {
+      continue
+    }
+    for (const e of entries) {
+      const p = path.join(d, e.name)
+      if (e.isDirectory()) stack.push(p)
+      else if (e.name.endsWith('.dart')) {
+        files++
+        try {
+          if ((await readFile(p, 'utf8')).includes('appFlavor')) return true
+        } catch {
+          /* unreadable — not evidence */
+        }
+      }
+    }
+  }
+  return false
+}
+
+export async function startRun(nodeId: unknown, rawConfig: unknown, rawOpts?: unknown): Promise<RunStartResult> {
+  // `attach`: switch a running Flutter app to this folder without rebuilding it (see canHotSwitch).
+  const attach = !!rawOpts && typeof rawOpts === 'object' && (rawOpts as { attach?: unknown }).attach === true
   if (!validNode(nodeId)) return { ok: false, error: 'Invalid node.' }
   if (process.platform === 'win32') {
     return { ok: false, error: 'Run configurations need a POSIX shell — not supported on Windows yet.' }
@@ -326,7 +362,21 @@ export async function startRun(nodeId: unknown, rawConfig: unknown): Promise<Run
     return { ok: false, error: `“${config.launchConfig}” is not in .vscode/launch.json.` }
   }
   if (!entry.supported) return { ok: false, error: entry.reason ?? 'This configuration cannot run here.' }
-  if (entry.kind === 'compound') return { ok: true, kind: 'compound', members: entry.members ?? [] }
+  if (entry.kind === 'compound') {
+    if (attach) return { ok: false, error: 'A compound cannot be switched to — rebuild instead.' }
+    return { ok: true, kind: 'compound', members: entry.members ?? [] }
+  }
+  if (attach) {
+    if (!entry.hotReload || entry.typeLabel !== 'Flutter') {
+      return { ok: false, error: `“${entry.name}” is not a Flutter run — it cannot be switched to without a rebuild.` }
+    }
+    if (entry.flavor && (await readsAppFlavor(dir))) {
+      return {
+        ok: false,
+        error: 'This app reads appFlavor, which flutter attach cannot set — rebuild to switch.'
+      }
+    }
+  }
 
   const cfg = file.configs.find((c) => c.name === entry.name) as LaunchConfig
   const tasks = await readTasks(dir)
@@ -344,7 +394,7 @@ export async function startRun(nodeId: unknown, rawConfig: unknown): Promise<Run
     extraArgs: config.extraArgs,
     flutterPidFile: flutterPidFile(nodeId),
     tasks
-  })
+  }, { attach })
   if (!planned.ok) return planned
   const plan = planned.plan
   if (plan.kind === 'browser') return { ok: true, kind: 'browser', url: plan.url }
@@ -528,7 +578,7 @@ export function registerRunConfigIpc(): void {
   platform().handle(IPC.runDevices, (refresh: unknown) => listDevices(refresh === true))
   platform().handle(IPC.runBootDevice, (udid: unknown) => bootSimulator(udid))
   platform().handle(IPC.runDiscover, (dir: unknown) => discoverProjects(dir))
-  platform().handle(IPC.runStart, (nodeId: unknown, config: unknown) => startRun(nodeId, config))
+  platform().handle(IPC.runStart, (nodeId: unknown, config: unknown, opts: unknown) => startRun(nodeId, config, opts))
   platform().handle(IPC.runStatus, (nodeId: unknown) => runStatus(nodeId))
   platform().handle(IPC.runStop, (nodeId: unknown, force: unknown) => stopRun(nodeId, force === true))
   platform().handle(IPC.runSignal, (nodeId: unknown, kind: unknown) => signalRun(nodeId, kind))

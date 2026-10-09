@@ -1,11 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_FLUTTER_ENTRY,
+  attachArgs,
+  attachConnected,
   buildLauncher,
+  canHotSwitch,
   defaultFlutterConfig,
   describeConfig,
   describeLaunchFile,
   deviceClaims,
+  flavorOf,
   normalizeRunConfig,
   parseEnvFile,
   parseJsonc,
@@ -18,7 +22,8 @@ import {
   runNodeTitle,
   type LaunchConfig,
   type PlanContext,
-  type ProcessPlan
+  type ProcessPlan,
+  type RunNodeConfig
 } from './run-config'
 
 const WS = '/Users/me/dev/app'
@@ -358,5 +363,77 @@ describe('presentation', () => {
       { id: 'b', title: 'B', runConfig: { deviceId: 'sim1' } }
     ]
     expect(deviceClaims(nodes, 'a', 'sim1')).toEqual(['B'])
+  })
+})
+
+describe('switching a running Flutter app without a rebuild', () => {
+  it('reads the flavor in either form', () => {
+    expect(flavorOf(['--flavor', 'dev'])).toBe('dev')
+    expect(flavorOf(['--flavor=staging'])).toBe('staging')
+    expect(flavorOf(['-d', 'x'])).toBeUndefined()
+  })
+
+  it('keeps only what flutter attach understands, dropping run-only flags with their values', () => {
+    expect(
+      attachArgs([
+        '--flavor', 'dev', '--dart-define=API=1', '-D', 'B=2', '--web-port=8080',
+        '--web-browser-flag', '--disable-web-security', '-t', 'lib/main_dev.dart', '--no-dds', '--route', '/home'
+      ])
+    ).toEqual({
+      kept: ['--dart-define=API=1', '-D', 'B=2', '-t', 'lib/main_dev.dart', '--no-dds'],
+      dropped: ['--flavor', 'dev', '--web-port=8080', '--web-browser-flag', '--disable-web-security', '--route', '/home']
+    })
+  })
+
+  it('plans flutter attach to the node device: target and dart-defines kept, flavor dropped, no preLaunchTask', () => {
+    const tasks = parseTasksFile('{ "tasks": [ { "label": "gen", "type": "shell", "command": "make" } ] }')
+    const r = planLaunch(
+      cfg({ type: 'dart', program: 'lib/main_dev.dart', args: ['--flavor', 'dev', '--dart-define=A=1'], preLaunchTask: 'gen' }),
+      ctx({ isFlutterProject: true, deviceId: 'SIM-1', tasks }),
+      { attach: true }
+    )
+    if (!r.ok || r.plan.kind !== 'process') throw new Error('expected a process plan')
+    expect(r.plan.argv).toEqual([
+      'flutter', 'attach', '-t', 'lib/main_dev.dart', '--dart-define=A=1', '-d', 'SIM-1', '--pid-file', '/data/run/n.flutter.pid'
+    ])
+    expect(r.plan.preTasks).toEqual([])
+    expect(r.plan.hotReload).toBe(true)
+  })
+
+  it('runs a Dart "request": "attach" configuration as flutter attach, and still refuses other attaches', () => {
+    const e = describeConfig(cfg({ type: 'dart', request: 'attach', vmServiceUri: 'http://127.0.0.1:1234/x=/' }), true)
+    expect(e).toMatchObject({ supported: true, attach: true, hotReload: true })
+    const r = planLaunch(cfg({ type: 'dart', request: 'attach', vmServiceUri: 'http://127.0.0.1:1234/x=/' }), ctx({ isFlutterProject: true, deviceId: 'SIM-1' }))
+    expect(r.ok && r.plan.kind === 'process' && r.plan.argv).toEqual([
+      'flutter', 'attach', '--debug-url', 'http://127.0.0.1:1234/x=/', '-d', 'SIM-1', '--pid-file', '/data/run/n.flutter.pid'
+    ])
+    expect(describeConfig(cfg({ type: 'dart', request: 'attach' }), false).supported).toBe(false)
+    expect(describeConfig(cfg({ type: 'node', request: 'attach' }), false).supported).toBe(false)
+  })
+
+  const entryFor = (raw: Record<string, unknown>) => describeConfig(cfg({ type: 'dart', program: 'lib/main.dart', ...raw }), true)
+  const running = { projectDir: '/a', deviceId: 'SIM-1', flavor: 'dev', hotReload: true }
+  const to = (over: Partial<RunNodeConfig> = {}, raw: Record<string, unknown> = { args: ['--flavor', 'dev'] }) => ({
+    config: { projectDir: '/b', deviceId: 'SIM-1', reloadOnSave: true, ...over },
+    entry: entryFor(raw)
+  })
+
+  it('allows the switch only for the same device and flavor, Flutter on both sides', () => {
+    expect(canHotSwitch(running, to())).toBe(true)
+    expect(canHotSwitch(running, to({ deviceId: 'SIM-2' }))).toBe(false)
+    expect(canHotSwitch(running, to({}, { args: ['--flavor', 'staging'] }))).toBe(false)
+    expect(canHotSwitch(running, to({}, { args: ['--flavor', 'dev', '-d', 'chrome'] }))).toBe(false)
+    expect(canHotSwitch(running, to({}, { program: 'test/a_test.dart', args: ['--flavor', 'dev'] }))).toBe(false)
+    expect(canHotSwitch(null, to())).toBe(false)
+    expect(canHotSwitch({ ...running, hotReload: false }, to())).toBe(false)
+  })
+
+  it('knows attach has connected only from help printed after its own launch line', () => {
+    const oldRun = 'Flutter run key commands.\nr Hot reload.\n'
+    expect(attachConnected(`${oldRun}▶ flutter attach -d SIM-1\nWaiting for a connection…\n`)).toBe(false)
+    expect(attachConnected(`${oldRun}▶ flutter attach -d SIM-1\nSyncing files…\nFlutter run key commands.\n`)).toBe(true)
+    // The launch line scrolled off: everything on screen is newer than it.
+    expect(attachConnected('…lots of output…\nFlutter run key commands.\n')).toBe(true)
+    expect(attachConnected('▶ flutter attach\n')).toBe(false)
   })
 })
