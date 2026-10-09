@@ -44,7 +44,7 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
   const [pinned, setPinned] = useState(false)
   const [frameSize, setFrameSize] = useState<{ w: number; h: number } | null>(null)
   const [booting, setBooting] = useState(false)
-  const imgRef = useRef<HTMLImageElement>(null)
+  const canvasRef = useRef<HTMLCanvasElement>(null)
   const screenRef = useRef<HTMLDivElement>(null)
 
   const sim = simulators(devices)
@@ -68,30 +68,45 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
     let live = true
     setPhase('starting')
     setMessage(null)
-    let objectUrl: string | null = null
-    let pending: { url: string; w: number; h: number } | null = null
+    // Frames are decoded straight to an ImageBitmap and drawn on a canvas. Not an <img> with a
+    // blob: URL: the renderer's CSP allows img-src 'self' data: nt-media: only, so every frame was
+    // a broken image — and a canvas needs no URL at all.
+    let pending: { bitmap: ImageBitmap; w: number; h: number } | null = null
     let raf = 0
+    let decoding = 0
     const offFrame = api.simulator.onFrame(id, (f) => {
       if (!live) return
-      const url = URL.createObjectURL(new Blob([f.jpeg as BlobPart], { type: 'image/jpeg' }))
-      if (pending) URL.revokeObjectURL(pending.url)
-      pending = { url, w: f.width, h: f.height }
-      // Draw at most once per animation frame: a burst of frames shows the newest.
-      if (!raf) {
-        raf = requestAnimationFrame(() => {
-          raf = 0
-          if (!pending || !imgRef.current) return
-          // Copy before clearing: React runs the state updater LATER, after `pending` is null.
-          const { url, w, h } = pending
-          pending = null
-          const old = objectUrl
-          objectUrl = url
-          imgRef.current.src = url
-          setFrameSize((s) => (s && s.w === w && s.h === h ? s : { w, h }))
-          setPhase('live')
-          if (old) URL.revokeObjectURL(old)
-        })
-      }
+      const seq = ++decoding
+      void createImageBitmap(new Blob([f.jpeg as BlobPart], { type: 'image/jpeg' })).then(
+        (bitmap) => {
+          // A newer frame decoded first (or the node went away): this one is stale.
+          if (!live || seq < decoding) {
+            bitmap.close()
+            return
+          }
+          pending?.bitmap.close()
+          pending = { bitmap, w: f.width, h: f.height }
+          // Draw at most once per animation frame: a burst of frames shows the newest.
+          if (!raf) {
+            raf = requestAnimationFrame(() => {
+              raf = 0
+              const canvas = canvasRef.current
+              if (!pending || !canvas) return
+              const { bitmap: b, w, h } = pending
+              pending = null
+              if (canvas.width !== w || canvas.height !== h) {
+                canvas.width = w
+                canvas.height = h
+              }
+              canvas.getContext('2d')?.drawImage(b, 0, 0)
+              b.close()
+              setFrameSize((s) => (s && s.w === w && s.h === h ? s : { w, h }))
+              setPhase('live')
+            })
+          }
+        },
+        () => undefined
+      )
     })
     const offStatus = api.simulator.onStatus(id, (e: SimulatorStatusEvent) => {
       if (!live) return
@@ -120,8 +135,7 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
       offFrame()
       offStatus()
       if (raf) cancelAnimationFrame(raf)
-      if (pending) URL.revokeObjectURL(pending.url)
-      if (objectUrl) URL.revokeObjectURL(objectUrl)
+      pending?.bitmap.close()
       void api.simulator.stop(id)
     }
   }, [api, id, udid, booted])
@@ -320,7 +334,7 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
           onKeyDown={onKey(true)}
           onKeyUp={onKey(false)}
         >
-          <img ref={imgRef} className="sim-node__frame" alt="" draggable={false} style={{ visibility: phase === 'live' ? 'visible' : 'hidden' }} />
+          <canvas ref={canvasRef} className="sim-node__frame" style={{ visibility: phase === 'live' ? 'visible' : 'hidden' }} />
           {phase !== 'live' && (
             <div className="sim-node__placeholder">
               {!udid
