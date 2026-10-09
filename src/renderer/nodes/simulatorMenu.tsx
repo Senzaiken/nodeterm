@@ -220,3 +220,135 @@ export function buildSimulatorMenu(h: SimulatorMenuHandlers, s: SimulatorMenuSta
     }
   ]
 }
+
+/**
+ * The ⋯ menu for an Android virtual device. The same shape as the iOS one: what the emulator's own
+ * interface (or adb) can do runs, and what it cannot is listed greyed out with "(Not Supported)".
+ */
+export function buildAndroidMenu(h: SimulatorMenuHandlers, s: Pick<SimulatorMenuState, 'device'>): MenuItem[] {
+  const d = s.device
+  const battery = (level: number, state: BatteryState, label: string): MenuItem => ({
+    label,
+    onClick: () => h.action({ a: 'status-bar', preset: 'battery', batteryLevel: level, batteryState: state })
+  })
+  return [
+    {
+      type: 'submenu',
+      label: 'Device',
+      children: [
+        { label: 'Home', onClick: () => h.button('home') },
+        { label: 'Back', onClick: () => h.button('back') },
+        { label: 'Recent Apps', onClick: () => h.button('recents') },
+        { label: 'Power', onClick: () => h.button('lock') },
+        { type: 'separator' },
+        { label: 'Volume Up', onClick: () => h.button('volup') },
+        { label: 'Volume Down', onClick: () => h.button('voldown') },
+        { label: 'Play / Pause', onClick: () => h.button('playpause') },
+        { type: 'separator' },
+        { label: 'Rotate Left  ⌘←', onClick: () => h.rotate('left') },
+        { label: 'Rotate Right  ⌘→', onClick: () => h.rotate('right') },
+        { type: 'separator' },
+        { label: 'Restart', onClick: () => h.action({ a: 'restart' }) },
+        { label: 'Shut Down', onClick: () => h.shutDown() },
+        notSupported('Wipe Data…', 'Use Android Studio’s Device Manager → Wipe Data (the emulator must be stopped).'),
+        notSupported('Fold / Unfold', 'Foldable postures are not wired up yet.')
+      ]
+    },
+    {
+      type: 'submenu',
+      label: 'Capture',
+      children: [
+        { label: 'Save Screenshot to Desktop', onClick: () => h.screenshot('desktop') },
+        { label: 'Copy Screenshot', onClick: () => h.screenshot('clipboard') },
+        { label: 'Add Screenshot to Canvas', onClick: () => h.screenshot('canvas') },
+        { type: 'separator' },
+        notSupported('Record Screen', 'Screen recording for Android devices is not wired up yet.')
+      ]
+    },
+    {
+      type: 'submenu',
+      label: 'Appearance',
+      children: [
+        { label: check(d.appearance === 'light', 'Light'), onClick: () => h.action({ a: 'appearance', value: 'light' }) },
+        { label: check(d.appearance === 'dark', 'Dark'), onClick: () => h.action({ a: 'appearance', value: 'dark' }) },
+        { type: 'separator' },
+        { label: 'Larger Text', onClick: () => h.action({ a: 'content-size', value: 'increment' }) },
+        { label: 'Smaller Text', onClick: () => h.action({ a: 'content-size', value: 'decrement' }) }
+      ]
+    },
+    {
+      type: 'submenu',
+      label: 'Location',
+      children: [
+        { label: 'Custom Location…', onClick: () => h.promptCustomLocation() },
+        notSupported('Routes', 'GPX / KML routes are played from Android Studio’s extended controls.')
+      ]
+    },
+    {
+      type: 'submenu',
+      label: 'Status Bar',
+      children: [
+        { label: 'Clean (9:41, full battery)', onClick: () => h.action({ a: 'status-bar', preset: 'clean' }) },
+        {
+          type: 'submenu',
+          label: 'Battery',
+          children: [
+            battery(100, 'charged', '100% — Charged'),
+            battery(50, 'charging', '50% — Charging'),
+            battery(50, 'discharging', '50%'),
+            battery(20, 'discharging', '20%'),
+            battery(5, 'discharging', '5%')
+          ]
+        },
+        { type: 'separator' },
+        { label: 'Clear Overrides', onClick: () => h.action({ a: 'status-bar', preset: 'clear' }) }
+      ]
+    },
+    {
+      type: 'submenu',
+      label: 'Biometrics',
+      children: [
+        { label: 'Matching Fingerprint', onClick: () => h.action({ a: 'biometric', kind: 'touch', op: 'match' }) },
+        { label: 'Non-matching Fingerprint', onClick: () => h.action({ a: 'biometric', kind: 'touch', op: 'nomatch' }) },
+        notSupported('Face Unlock', 'The emulator has no face sensor to simulate.')
+      ]
+    },
+    {
+      type: 'submenu',
+      label: 'Clipboard',
+      children: [
+        { label: 'Paste Mac Clipboard into Device  ⌘V', disabled: true, hint: 'Press ⌘V while the screen has focus.', onClick: () => undefined },
+        { label: 'Copy Device Clipboard to Mac', onClick: () => h.action({ a: 'pasteboard', dir: 'to-mac' }) }
+      ]
+    },
+    {
+      type: 'submenu',
+      label: 'Apps',
+      children: [
+        { label: 'Install APK…', onClick: () => h.pickInstall() },
+        { label: 'Add Photo or Video…', onClick: () => h.pickMedia() },
+        { type: 'separator' },
+        { label: 'Open URL…', onClick: () => h.promptOpenUrl() },
+        notSupported('Send Push Notification…', 'Android push goes through Firebase Cloud Messaging, which the emulator does not simulate.'),
+        notSupported('Permissions…', 'Grant or revoke permissions with adb shell pm grant / revoke.')
+      ]
+    },
+    {
+      type: 'submenu',
+      label: 'View',
+      children: [
+        { label: 'Actual Size', onClick: () => h.actualSize() },
+        { label: 'Fit to Screen', onClick: () => h.fitToScreen() }
+      ]
+    },
+    { type: 'separator' },
+    {
+      type: 'submenu',
+      label: 'Device Management',
+      children: [
+        notSupported('New Device…', 'Create virtual devices in Android Studio’s Device Manager.'),
+        notSupported('Rename…', 'Rename virtual devices in Android Studio’s Device Manager.')
+      ]
+    }
+  ]
+}

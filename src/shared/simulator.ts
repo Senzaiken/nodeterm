@@ -6,9 +6,61 @@
  */
 import { SIMULATOR_UDID } from './run-config'
 
+// ── Devices: iOS simulators and Android virtual devices ───────────────────────────────────────
+//
+// One node shows either. An iOS simulator is named by its UDID; an Android virtual device (AVD) by
+// `avd:<name>` — the AVD's name is its stable identity (a running emulator's adb serial changes from
+// run to run). The persisted field keeps its old name, `udid`, so existing nodes load unchanged.
+
+export type SimulatorPlatform = 'ios' | 'android'
+
+/** An AVD's name, as avdmanager allows it. */
+export const ANDROID_AVD_NAME = /^[A-Za-z0-9._-]{1,128}$/
+export const ANDROID_DEVICE_ID = /^avd:[A-Za-z0-9._-]{1,128}$/
+
+export function androidDeviceId(avd: string): string {
+  return `avd:${avd}`
+}
+
+/** The AVD name inside an Android device id, or null for anything else. */
+export function avdNameOf(id: string): string | null {
+  return ANDROID_DEVICE_ID.test(id) ? id.slice(4) : null
+}
+
+/** Which kind of device an id names, or null when it is neither. */
+export function simulatorPlatformOf(id: unknown): SimulatorPlatform | null {
+  if (typeof id !== 'string') return null
+  if (ANDROID_DEVICE_ID.test(id)) return 'android'
+  if (SIMULATOR_UDID.test(id)) return 'ios'
+  return null
+}
+
+/** The canonical form of a device id (UDIDs upper-cased), or null when it is not one. */
+export function normalizeDeviceId(id: unknown): string | null {
+  const p = simulatorPlatformOf(id)
+  if (!p) return null
+  return p === 'ios' ? (id as string).toUpperCase() : (id as string)
+}
+
+export interface SimulatorDevice {
+  id: string
+  name: string
+  platform: SimulatorPlatform
+  /** "iOS 27.1", "API 34". */
+  os?: string
+  state: 'booted' | 'shutdown'
+}
+
+export interface SimulatorDevicesResult {
+  devices: SimulatorDevice[]
+  /** Why there are no Android devices, when that is not simply "none installed". */
+  androidError?: string
+}
+
 /** Persisted on a `simulator` node as `data.simulator`. */
 export interface SimulatorNodeConfig {
-  /** The simulator's UDID. Absent until one is picked. */
+  /** The device: an iOS simulator's UDID, or `avd:<name>` for an Android virtual device. Absent
+   *  until one is picked. */
   udid?: string
   /** Its name when picked, so the node can label it before devices load. */
   name?: string
@@ -78,8 +130,9 @@ export function normalizeSimulatorConfig(raw: unknown): SimulatorNodeConfig {
   if (!raw || typeof raw !== 'object') return {}
   const r = raw as Record<string, unknown>
   const out: SimulatorNodeConfig = {}
-  if (typeof r.udid === 'string' && SIMULATOR_UDID.test(r.udid)) {
-    out.udid = r.udid.toUpperCase()
+  const id = normalizeDeviceId(r.udid)
+  if (id) {
+    out.udid = id
     if (typeof r.name === 'string' && r.name.trim() && r.name.length <= 200 && !CONTROL.test(r.name)) out.name = r.name.trim()
   }
   if (isSimulatorOrientation(r.orientation) && r.orientation !== 'portrait') out.orientation = r.orientation
@@ -90,8 +143,38 @@ export const SIMULATOR_NODE_ID = /^[A-Za-z0-9._-]{1,128}$/
 
 // ── Input ──────────────────────────────────────────────────────────────────────────────────────
 
-export type SimulatorButton = 'home' | 'lock' | 'side' | 'siri' | 'volup' | 'voldown' | 'playpause'
-const BUTTONS: readonly SimulatorButton[] = ['home', 'lock', 'side', 'siri', 'volup', 'voldown', 'playpause']
+export type SimulatorButton = 'home' | 'lock' | 'side' | 'siri' | 'volup' | 'voldown' | 'playpause' | 'back' | 'recents'
+const BUTTONS: readonly SimulatorButton[] = ['home', 'lock', 'side', 'siri', 'volup', 'voldown', 'playpause', 'back', 'recents']
+
+/**
+ * An Android emulator's hardware buttons, as the W3C key names its gRPC interface maps to Android
+ * keys. MEASURED (emulator 36.6.11): GoHome, GoBack and AppSwitch each did what the device's own
+ * buttons do. iOS-only buttons have no entry and are refused.
+ */
+export const ANDROID_BUTTON_KEYS: Readonly<Partial<Record<SimulatorButton, string>>> = {
+  home: 'GoHome',
+  back: 'GoBack',
+  recents: 'AppSwitch',
+  lock: 'Power',
+  side: 'Power',
+  volup: 'AudioVolumeUp',
+  voldown: 'AudioVolumeDown',
+  playpause: 'MediaPlayPause'
+}
+
+/**
+ * How far an Android emulator is turned for each orientation (the `orientation` input's value is
+ * the iOS GSEvent number, shared by both platforms). MEASURED: z = 90 turns the device left — the
+ * frames then arrive already turned, camera on the left — while touches stay in portrait panel
+ * coordinates, so the node maps them exactly as it does for iOS.
+ */
+export const ANDROID_ROTATION_Z: Readonly<Record<number, number>> = { 1: 0, 2: 180, 3: 90, 4: -90 }
+
+/** Whether a platform sends its frames already turned (Android) or always portrait (iOS, where the
+ *  node turns the picture itself). */
+export function picturePreRotated(p: SimulatorPlatform): boolean {
+  return p === 'android'
+}
 
 export type SimulatorInput =
   | { t: 'down' | 'move' | 'up'; x: number; y: number }
@@ -196,6 +279,8 @@ export interface SimulatorDisplayInfo {
   name: string
   /** simctl's screen id for it (`simctl io --display=<id>`), 0 when unknown. */
   screenID: number
+  /** Device pixels per point, when known (an Android AVD's density / 160). */
+  scale?: number
 }
 
 export type SimulatorStatusEvent =
@@ -208,12 +293,19 @@ export interface SimulatorFrame {
   width: number
   height: number
   display: number
+  /** The encoded picture (JPEG from the iOS helper, PNG from an Android emulator — see `mime`). */
   jpeg: Uint8Array
+  /** Absent = JPEG. */
+  mime?: 'image/png'
 }
 
 export type SimulatorStartResult = { ok: true } | { ok: false; error: string }
 
 export interface SimulatorApi {
+  /** Every iOS simulator and Android virtual device installed on this machine. */
+  devices(refresh?: boolean): Promise<SimulatorDevicesResult>
+  /** Boot a device (an Android one headless: the node is its screen). */
+  boot(id: string): Promise<{ ok: true } | { ok: false; error: string }>
   /** Start streaming `udid` into this node (compiles the helper on first use). */
   start(nodeId: string, udid: string): Promise<SimulatorStartResult>
   stop(nodeId: string): Promise<void>
@@ -309,13 +401,20 @@ export type SimulatorAction =
   | { a: 'push'; bundleId: string; payload: string }
   | { a: 'privacy'; op: 'grant' | 'revoke' | 'reset'; service: PrivacyService; bundleId?: string }
   | { a: 'pasteboard'; dir: 'to-device' | 'to-mac' }
+  /** Android: set the device clipboard to this text (⌘V then presses Ctrl+V there). */
+  | { a: 'clipboard-set'; text: string }
   | { a: 'install'; path: string }
   | { a: 'add-media'; paths: string[] }
   | { a: 'restart' }
   | { a: 'erase' }
   | { a: 'open-devicehub' }
 
-export type SimulatorActionResult = { ok: true; message?: string } | { ok: false; error: string }
+/** `text` is the device clipboard, for the Android "copy the device clipboard" action (core has no
+ *  clipboard of its own, so the renderer writes it). */
+export type SimulatorActionResult = { ok: true; message?: string; text?: string } | { ok: false; error: string }
+
+/** Longest text the clipboard action carries (the same bound the relay uses for a paste). */
+export const MAX_CLIPBOARD_TEXT = 64_000
 export type SimulatorCaptureTarget = 'desktop' | 'clipboard' | 'canvas'
 
 /** What the menu shows a ✓ for, and the location scenarios to offer. Parts that could not be read
@@ -401,6 +500,11 @@ export function normalizeSimulatorAction(raw: unknown): SimulatorAction | null {
     }
     case 'pasteboard':
       return r.dir === 'to-device' || r.dir === 'to-mac' ? { a: 'pasteboard', dir: r.dir } : null
+    case 'clipboard-set':
+      // NUL is the one character a clipboard string cannot carry to the device.
+      return typeof r.text === 'string' && r.text.length <= MAX_CLIPBOARD_TEXT && !r.text.includes('\u0000')
+        ? { a: 'clipboard-set', text: r.text }
+        : null
     case 'install':
       return absPath(r.path) ? { a: 'install', path: r.path } : null
     case 'add-media':

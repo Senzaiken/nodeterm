@@ -11,9 +11,13 @@ import {
   draggedSide,
   fitNodeToScreen,
   hidUsageForCode,
+  picturePreRotated,
   rotateOrientation,
+  simulatorPlatformOf,
   pointerToScreenRatio,
+  type SimulatorDevice,
   type SimulatorDisplayInfo,
+  type SimulatorPlatform,
   type SimulatorAction,
   type SimulatorCaptureTarget,
   type SimulatorDeviceState,
@@ -22,10 +26,9 @@ import {
   type SimulatorOrientation,
   type SimulatorStatusEvent
 } from '@shared/simulator'
-import type { RunDevice } from '@shared/run-config'
 import { useSession } from '../session/session'
 import { ContextMenu } from '../components/ContextMenu'
-import { buildSimulatorMenu } from './simulatorMenu'
+import { buildAndroidMenu, buildSimulatorMenu, type SimulatorMenuHandlers } from './simulatorMenu'
 import { NODE_MIN_SIZES } from '../lib/nodeSizing'
 import type { CanvasNode } from '../state/workspace'
 
@@ -51,6 +54,9 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
   const config = (data.simulator as SimulatorNodeConfig | undefined) ?? {}
   const udid = config.udid
   const orientation: SimulatorOrientation = config.orientation ?? 'portrait'
+  const plat: SimulatorPlatform = simulatorPlatformOf(udid) ?? 'ios'
+  const platRef = useRef(plat)
+  platRef.current = plat
   // Read by the draw loop and the input path, which live in long-lived closures.
   const orientationRef = useRef(orientation)
   orientationRef.current = orientation
@@ -58,7 +64,8 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
    *  frame (an app that does not rotate leaves the framebuffer unchanged). */
   const lastBitmap = useRef<ImageBitmap | null>(null)
 
-  const [devices, setDevices] = useState<RunDevice[] | null>(null)
+  const [devices, setDevices] = useState<SimulatorDevice[] | null>(null)
+  const [androidError, setAndroidError] = useState<string | undefined>(undefined)
   const [phase, setPhase] = useState<Phase>('idle')
   const [message, setMessage] = useState<string | null>(null)
   const [displays, setDisplays] = useState<SimulatorDisplayInfo[]>([])
@@ -83,13 +90,16 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
   const screenRef = useRef<HTMLDivElement>(null)
   const rootRef = useRef<HTMLDivElement>(null)
 
-  const sim = simulators(devices)
+  const sim = devices ?? []
   const device = sim.find((d) => d.id === udid)
   const booted = device?.state === 'booted'
 
   const loadDevices = useCallback(
     (refresh: boolean) => {
-      void api.runConfig.devices(refresh).then((r) => setDevices(r.devices))
+      void api.simulator.devices(refresh).then((r) => {
+        setDevices(r.devices)
+        setAndroidError(r.androidError)
+      })
     },
     [api]
   )
@@ -101,7 +111,8 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
     const canvas = canvasRef.current
     const b = lastBitmap.current
     if (!canvas || !b) return
-    const deg = ORIENTATION_DEGREES[orientationRef.current]
+    // An Android emulator sends its frames already turned; only iOS frames are always portrait.
+    const deg = picturePreRotated(platRef.current) ? 0 : ORIENTATION_DEGREES[orientationRef.current]
     const w = deg % 180 ? b.height : b.width
     const h = deg % 180 ? b.width : b.height
     if (canvas.width !== w || canvas.height !== h) {
@@ -139,7 +150,7 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
       if (!live) return
       framesSeen.current++
       const seq = ++decoding
-      void createImageBitmap(new Blob([f.jpeg as BlobPart], { type: 'image/jpeg' })).then(
+      void createImageBitmap(new Blob([f.jpeg as BlobPart], { type: f.mime ?? 'image/jpeg' })).then(
         (bitmap) => {
           // A newer frame decoded first (or the node went away): this one is stale.
           if (!live || seq < decoding) {
@@ -265,6 +276,8 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
   // Counted from the finger going DOWN, so a drag that moved the screen while held is answered.
   const touchStartFrames = useRef(0)
   const watchTouch = useCallback(() => {
+    // The hint is about DeviceHub holding an iOS device's input; Android has no such rule.
+    if (platRef.current !== 'ios') return
     const before = touchStartFrames.current
     const t = setTimeout(() => {
       touchTimers.current.delete(t)
@@ -373,6 +386,8 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
   // with nodeterm so the app's own shortcuts keep working while the screen has focus.
   const onKey = (down: boolean) => (e: React.KeyboardEvent) => {
     if (e.target !== e.currentTarget) return
+    // ⌘V on Android: let the app's own paste happen — the screen's paste event carries the text.
+    if (phase === 'live' && e.metaKey && e.code === 'KeyV' && plat === 'android') return
     // ⌘V pastes the Mac clipboard: sync it to the device, then press ⌘V there.
     if (phase === 'live' && e.metaKey && e.code === 'KeyV') {
       e.preventDefault()
@@ -403,6 +418,22 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
     send({ t: 'key', usage, down })
   }
 
+  // Android ⌘V: put the host's text on the device clipboard, then press Ctrl+V there (Android's own
+  // paste shortcut in a text field).
+  const onPaste = (e: React.ClipboardEvent) => {
+    if (plat !== 'android' || phase !== 'live') return
+    const text = e.clipboardData.getData('text/plain')
+    e.preventDefault()
+    e.stopPropagation()
+    if (!text) return
+    void act({ a: 'clipboard-set', text }).then(() => {
+      send({ t: 'key', usage: 0xe0, down: true })
+      send({ t: 'key', usage: 0x19, down: true })
+      send({ t: 'key', usage: 0x19, down: false })
+      send({ t: 'key', usage: 0xe0, down: false })
+    })
+  }
+
   // ── Header actions ───────────────────────────────────────────────────────────────────────────
   const pick = (value: string) => {
     const d = sim.find((x) => x.id === value)
@@ -414,9 +445,10 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
   const boot = async () => {
     if (!udid) return
     setBooting(true)
-    const ok = await api.runConfig.bootDevice(udid)
+    setMessage(null)
+    const r = await api.simulator.boot(udid)
     setBooting(false)
-    if (!ok) setMessage('Could not boot this simulator.')
+    if (!r.ok) setMessage(r.error)
     loadDevices(true)
   }
   const shutdown = async () => {
@@ -443,6 +475,7 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
       if (!udid) return
       const r = await api.simulator.action(udid, a)
       say(r)
+      if (r.ok && r.text !== undefined) api.clipboard.writeText(r.text)
       if (r.ok && (a.a === 'appearance' || a.a === 'increase-contrast' || a.a === 'content-size')) {
         void api.simulator.state(udid).then(setDevState)
       }
@@ -485,7 +518,7 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
     const root = rootRef.current
     const screen = screenRef.current
     if (!disp || !root || !screen) return
-    const scale = /ipad/i.test(device?.name ?? config.name ?? '') ? 2 : 3
+    const scale = disp.scale ?? (/ipad/i.test(device?.name ?? config.name ?? '') ? 2 : 3)
     const turned = ORIENTATION_DEGREES[orientationRef.current] % 180 !== 0
     const w = Math.round((turned ? disp.height : disp.width) / scale + (root.offsetWidth - screen.offsetWidth))
     const h = Math.round((turned ? disp.width : disp.height) / scale + (root.offsetHeight - screen.offsetHeight))
@@ -505,8 +538,7 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
     if (udid) void api.simulator.state(udid).then(setDevState)
   }
 
-  const menuItems = buildSimulatorMenu(
-    {
+  const menuHandlers: SimulatorMenuHandlers = {
       button: (name) => send({ t: 'button', name }),
       rotate,
       action: (a) => void act(a),
@@ -563,9 +595,11 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
       pickMedia: () => void pickFile('media'),
       actualSize,
       fitToScreen: () => fitToScreen('long')
-    },
-    { device: devState, recording }
-  )
+    }
+  const menuItems =
+    plat === 'android'
+      ? buildAndroidMenu(menuHandlers, { device: devState })
+      : buildSimulatorMenu(menuHandlers, { device: devState, recording })
 
   // Drop a built .app to install it, photos/videos to add them to the library.
   const onDrop = (e: React.DragEvent) => {
@@ -575,11 +609,15 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
     const paths = Array.from(e.dataTransfer.files)
       .map((f) => window.nodeTerminal.getPathForFile(f))
       .filter(Boolean)
-    const apps = paths.filter((p) => /\.app\/?$/.test(p))
+    const apps = paths.filter((p) => (plat === 'android' ? /\.apks?$/i : /\.app\/?$/).test(p))
     const media = paths.filter((p) => /\.(png|jpe?g|gif|heic|heif|webp|mov|mp4|m4v)$/i.test(p))
     for (const app of apps) void act({ a: 'install', path: app.replace(/\/$/, '') })
     if (media.length) void act({ a: 'add-media', paths: media })
-    if (!apps.length && !media.length) setToast({ text: 'Drop a built .app to install it, or photos and videos to add them to Photos.', error: true })
+    if (!apps.length && !media.length)
+      setToast({
+        text: plat === 'android' ? 'Drop an .apk to install it, or photos and videos to add them to Pictures.' : 'Drop a built .app to install it, or photos and videos to add them to Photos.',
+        error: true
+      })
   }
 
   const statusText =
@@ -595,9 +633,11 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
               ? 'Shut down'
               : ''
 
-  const twins = useMemo(() => new Set(sim.filter((d, i) => sim.findIndex((o) => o.name === d.name && o.platform === d.platform) !== i).map((d) => `${d.name}|${d.platform}`)), [sim])
-  const deviceLabel = (d: RunDevice) =>
-    `${d.name}${d.platform ? ` · ${d.platform}` : ''}${twins.has(`${d.name}|${d.platform}`) ? ` · ${d.id.slice(0, 4)}` : ''}${d.state === 'booted' ? '' : ' (off)'}`
+  const twins = useMemo(() => new Set(sim.filter((d, i) => sim.findIndex((o) => o.name === d.name && o.os === d.os) !== i).map((d) => `${d.name}|${d.os}`)), [sim])
+  const deviceLabel = (d: SimulatorDevice) =>
+    `${d.name}${d.os ? ` · ${d.os}` : ''}${twins.has(`${d.name}|${d.os}`) ? ` · ${d.id.replace(/^avd:/, '').slice(0, 4)}` : ''}${d.state === 'booted' ? '' : ' (off)'}`
+  const iosDevices = sim.filter((d) => d.platform === 'ios')
+  const androidDevices = sim.filter((d) => d.platform === 'android')
 
   return (
     <>
@@ -614,11 +654,24 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
           <select className="run-bar__select sim-node__device" value={udid ?? ''} onChange={(e) => pick(e.target.value)}>
             {!udid && <option value="">{devices ? 'Pick a simulator…' : 'Loading…'}</option>}
             {udid && !device && <option value={udid}>{config.name ?? udid}</option>}
-            {sim.map((d) => (
-              <option key={d.id} value={d.id}>
-                {deviceLabel(d)}
-              </option>
-            ))}
+            {iosDevices.length > 0 && (
+              <optgroup label="iOS">
+                {iosDevices.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {deviceLabel(d)}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+            {androidDevices.length > 0 && (
+              <optgroup label="Android">
+                {androidDevices.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {deviceLabel(d)}
+                  </option>
+                ))}
+              </optgroup>
+            )}
           </select>
           <button className="run-bar__icon" title="Refresh simulators" onClick={() => loadDevices(true)}>
             ⟳
@@ -652,9 +705,19 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
               <button className="run-bar__icon" title="Rotate right (⌘→)" onClick={() => rotate('right')}>
                 ↻
               </button>
+              {plat === 'android' && (
+                <button className="run-bar__icon" title="Back" onClick={() => send({ t: 'button', name: 'back' })}>
+                  ◁
+                </button>
+              )}
               <button className="run-bar__icon" title="Home" onClick={() => send({ t: 'button', name: 'home' })}>
                 ⌂
               </button>
+              {plat === 'android' && (
+                <button className="run-bar__icon" title="Recent apps" onClick={() => send({ t: 'button', name: 'recents' })}>
+                  ▢
+                </button>
+              )}
               <button className="run-bar__icon" title="Lock / side button" onClick={() => send({ t: 'button', name: 'lock' })}>
                 ⏻
               </button>
@@ -669,7 +732,7 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
             </button>
           )}
           {udid && booted && (
-            <button className="run-bar__icon" title="More (everything DeviceHub offers)" aria-label="More" onClick={openMenu}>
+            <button className="run-bar__icon" title={plat === 'android' ? 'More' : 'More (everything DeviceHub offers)'} aria-label="More" onClick={openMenu}>
               ⋯
             </button>
           )}
@@ -686,6 +749,7 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
           onWheel={onWheel}
           onKeyDown={onKey(true)}
           onKeyUp={onKey(false)}
+          onPaste={onPaste}
           onDragOver={(e) => {
             if (phase !== 'live') return
             e.preventDefault()
@@ -698,11 +762,13 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
           {phase !== 'live' && (
             <div className="sim-node__placeholder">
               {!udid
-                ? 'Pick a simulator above.'
+                ? `Pick a simulator above.${androidError ? ` ${androidError}` : ''}`
                 : device && !booted
                   ? 'This simulator is shut down — Boot it to see its screen.'
                   : phase === 'starting'
-                    ? 'Connecting to the simulator… (the first time builds a small helper with Xcode)'
+                    ? plat === 'android'
+                      ? 'Connecting to the emulator…'
+                      : 'Connecting to the simulator… (the first time builds a small helper with Xcode)'
                     : (message ?? '')}
             </div>
           )}
@@ -773,10 +839,6 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
       />
     </>
   )
-}
-
-function simulators(devices: RunDevice[] | null): RunDevice[] {
-  return (devices ?? []).filter((d) => d.kind === 'simulator')
 }
 
 /** A point outside the drawn screen, pinned to its nearest edge (a drag that leaves the screen). */

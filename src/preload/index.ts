@@ -560,6 +560,8 @@ const api: NodeTerminalApi = {
     importImage: (p) => ipcRenderer.invoke(IPC.wallpaperImport, p)
   },
   simulator: {
+    devices: (refresh) => ipcRenderer.invoke(IPC.simulatorDevices, refresh === true),
+    boot: (id) => ipcRenderer.invoke(IPC.simulatorBoot, id),
     start: (nodeId, udid) => ipcRenderer.invoke(IPC.simulatorStart, nodeId, udid),
     stop: (nodeId) => ipcRenderer.invoke(IPC.simulatorStop, nodeId),
     input: (nodeId, cmd) => ipcRenderer.invoke(IPC.simulatorInput, nodeId, cmd),

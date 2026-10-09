@@ -1,18 +1,26 @@
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdir, stat } from 'node:fs/promises'
+import { mkdir, rm, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { IPC } from '../../shared/ipc'
 import {
   SIMULATOR_NODE_ID,
+  avdNameOf,
+  normalizeDeviceId,
   normalizeSimulatorInput,
+  type SimulatorDevice,
+  type SimulatorDevicesResult,
   type SimulatorDisplayInfo,
   type SimulatorStartResult,
   type SimulatorStatusEvent
 } from '../../shared/simulator'
 import { SIMULATOR_UDID } from '../../shared/run-config'
-import { renameAtomic, writeFileAtomic } from '../fs-atomic'
+import { bootSimulator, listSimulators } from '../run-service'
+import { VM_SHUTDOWN, vmRunState } from './android-grpc'
+import { androidNodeAvd, androidUnary, sendAndroidInput, startAndroid, stopAllAndroid, stopAndroid, type AndroidHooks } from './android-bridge'
+import { bootAndroid, findRunning, listAndroidDevices } from './android-sdk'
+import { renameAtomic, tempNameFor, writeFileAtomic } from '../fs-atomic'
 import { platform } from '../platform'
 import { SIMBRIDGE_SOURCE, SIMBRIDGE_VERSION } from './simbridge-source'
 import { registerSimulatorActionIpc } from './simulator-actions'
@@ -97,12 +105,13 @@ async function buildBridge(): Promise<{ ok: true; path: string } | { ok: false; 
   await mkdir(dir, { recursive: true })
   const src = path.join(dir, 'nt-simbridge.swift')
   await writeFileAtomic(src, SIMBRIDGE_SOURCE)
-  const tmpBin = `${bin}.${process.pid}.${Date.now().toString(36)}.tmp`
+  const tmpBin = tempNameFor(bin)
   try {
     await run('/usr/bin/xcrun', ['swiftc', '-O', src, '-o', tmpBin], { timeout: 300_000, maxBuffer: 8 * 1024 * 1024 })
     await renameAtomic(tmpBin, bin)
     return { ok: true, path: bin }
   } catch (e) {
+    await rm(tmpBin, { force: true }).catch(() => undefined)
     const msg = String((e as { stderr?: string }).stderr || (e as Error).message)
     const first = msg.split('\n').find((l) => l.includes('error:')) ?? msg.split('\n')[0]
     return { ok: false, error: `Could not build the simulator helper with this Xcode: ${first}` }
@@ -166,10 +175,21 @@ export function frameParser(onFrame: (f: { width: number; height: number; displa
   }
 }
 
+const androidHooks: AndroidHooks = {
+  frame: (nodeId, f) => platform().broadcast(IPC.simulatorFrame(nodeId), f),
+  status: (nodeId, e) => emitStatus(nodeId, e)
+}
+
 export async function startSimulator(nodeId: unknown, udidRaw: unknown): Promise<SimulatorStartResult> {
   if (typeof nodeId !== 'string' || !SIMULATOR_NODE_ID.test(nodeId)) return { ok: false, error: 'Invalid node.' }
-  if (typeof udidRaw !== 'string' || !SIMULATOR_UDID.test(udidRaw)) return { ok: false, error: 'Pick a simulator.' }
-  const udid = udidRaw.toUpperCase()
+  const id = normalizeDeviceId(udidRaw)
+  if (!id) return { ok: false, error: 'Pick a simulator.' }
+  const avd = avdNameOf(id)
+  if (avd) {
+    if (androidNodeAvd(nodeId) !== avd || nodeDevice.has(nodeId)) stopSimulator(nodeId)
+    return startAndroid(nodeId, avd, androidHooks)
+  }
+  const udid = id
   if (nodeDevice.get(nodeId) !== udid) stopSimulator(nodeId)
   const running = bridges.get(udid)
   if (running && !running.stopping) {
@@ -222,6 +242,7 @@ export async function startSimulator(nodeId: unknown, udidRaw: unknown): Promise
 
 export function stopSimulator(nodeId: unknown): void {
   if (typeof nodeId !== 'string') return
+  stopAndroid(nodeId)
   const udid = nodeDevice.get(nodeId)
   nodeDevice.delete(nodeId)
   const b = udid ? bridges.get(udid) : undefined
@@ -238,9 +259,10 @@ export function stopSimulator(nodeId: unknown): void {
 
 export function sendSimulatorInput(nodeId: unknown, raw: unknown): boolean {
   if (typeof nodeId !== 'string') return false
+  const cmd = normalizeSimulatorInput(raw)
+  if (cmd && androidNodeAvd(nodeId)) return sendAndroidInput(nodeId, cmd)
   const udid = nodeDevice.get(nodeId)
   const b = udid ? bridges.get(udid) : undefined
-  const cmd = normalizeSimulatorInput(raw)
   if (!b || !cmd || b.child.stdin.destroyed) return false
   b.child.stdin.write(JSON.stringify(cmd) + '\n')
   return true
@@ -248,9 +270,26 @@ export function sendSimulatorInput(nodeId: unknown, raw: unknown): boolean {
 
 export function stopAllSimulators(): void {
   for (const id of [...nodeDevice.keys()]) stopSimulator(id)
+  stopAllAndroid()
 }
 
 export async function shutdownSimulator(udid: unknown): Promise<boolean> {
+  const avd = typeof udid === 'string' ? avdNameOf(udid) : null
+  if (avd) {
+    // SHUTDOWN is what closing the emulator window does: Android is told, then the emulator exits
+    // (saving its quick-boot snapshot when the AVD keeps one).
+    if (!(await findRunning(avd))) return true
+    try {
+      await androidUnary(avd, 'setVmState', vmRunState(VM_SHUTDOWN))
+    } catch {
+      return false
+    }
+    for (let i = 0; i < 60; i++) {
+      if (!(await findRunning(avd))) return true
+      await new Promise((r) => setTimeout(r, 500))
+    }
+    return false
+  }
   if (process.platform !== 'darwin' || typeof udid !== 'string' || !SIMULATOR_UDID.test(udid)) return false
   try {
     await run('/usr/bin/xcrun', ['simctl', 'shutdown', udid], { timeout: 60_000 })
@@ -260,7 +299,25 @@ export async function shutdownSimulator(udid: unknown): Promise<boolean> {
   }
 }
 
+/** Every simulator the node can show: iOS simulators (macOS) and Android virtual devices. */
+export async function listSimulatorDevices(): Promise<SimulatorDevicesResult> {
+  const [sims, android] = await Promise.all([listSimulators(), listAndroidDevices()])
+  const ios: SimulatorDevice[] = sims
+    .map((d) => ({ id: d.id, name: d.name, platform: 'ios' as const, os: d.platform, state: d.state === 'booted' ? 'booted' : 'shutdown' }))
+  return { devices: [...ios, ...android.devices], ...(android.error ? { androidError: android.error } : {}) }
+}
+
+export async function bootSimulatorDevice(idRaw: unknown): Promise<{ ok: true } | { ok: false; error: string }> {
+  const id = normalizeDeviceId(idRaw)
+  if (!id) return { ok: false, error: 'Pick a simulator.' }
+  const avd = avdNameOf(id)
+  if (avd) return bootAndroid(avd)
+  return (await bootSimulator(id)) ? { ok: true } : { ok: false, error: 'Could not boot this simulator.' }
+}
+
 export function registerSimulatorIpc(): void {
+  platform().handle(IPC.simulatorDevices, () => listSimulatorDevices())
+  platform().handle(IPC.simulatorBoot, (id: unknown) => bootSimulatorDevice(id))
   platform().handle(IPC.simulatorStart, (nodeId: unknown, udid: unknown) => startSimulator(nodeId, udid))
   platform().handle(IPC.simulatorStop, (nodeId: unknown) => stopSimulator(nodeId))
   platform().handle(IPC.simulatorInput, (nodeId: unknown, cmd: unknown) => sendSimulatorInput(nodeId, cmd))

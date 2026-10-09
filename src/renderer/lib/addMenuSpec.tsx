@@ -30,7 +30,6 @@
 import type { ReactNode } from 'react'
 import type { MenuItem } from '../components/ContextMenu'
 import { ACCOUNT_CAPABLE_AGENT_IDS } from '@shared/agents/account-binding'
-import { isMacPlatform } from '@shared/platform-utils'
 import { isBrowserRuntime } from '../bridge/runtime'
 import {
   IconAgent,
@@ -139,10 +138,12 @@ export const WORKTREE_SSH_HINT = 'Not supported in SSH projects yet'
 /** A run node's launcher, processes and (Flutter) simulators all live on THIS machine. */
 export const RUN_SSH_HINT = 'Run configurations run on this machine — not in SSH projects yet'
 /** iOS simulators live on the Mac the desktop app runs on; a browser tab (Server Edition) is not it. */
-export const SIMULATOR_UNAVAILABLE_HINT = 'iOS simulators need the macOS desktop app'
-/** Whether this renderer can show a Simulator node (macOS, Electron — not a Server Edition tab). */
+export const SIMULATOR_UNAVAILABLE_HINT = 'Simulators need the desktop app'
+/** Whether this renderer can show a Simulator node: the desktop app on any OS — Android emulators
+ *  run everywhere; iOS simulators are simply absent from the list off macOS. Not a Server Edition
+ *  tab, whose emulators would be the server's. */
 export function simulatorAvailable(): boolean {
-  return isMacPlatform() && !isBrowserRuntime()
+  return !isBrowserRuntime()
 }
 
 /**

@@ -119,7 +119,7 @@ async function shellEnv(): Promise<NodeJS.ProcessEnv> {
   return p ? { ...process.env, PATH: p } : process.env
 }
 
-async function listSimulators(): Promise<RunDevice[]> {
+export async function listSimulators(): Promise<RunDevice[]> {
   if (process.platform !== 'darwin') return []
   try {
     const { stdout } = await run('/usr/bin/xcrun', ['simctl', 'list', 'devices', 'available', '-j'], {

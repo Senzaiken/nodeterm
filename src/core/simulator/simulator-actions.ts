@@ -6,12 +6,14 @@ import { promisify } from 'node:util'
 import { IPC } from '../../shared/ipc'
 import { SIMULATOR_UDID } from '../../shared/run-config'
 import {
+  avdNameOf,
   normalizeSimulatorAction,
   type SimulatorAction,
   type SimulatorActionResult,
   type SimulatorCaptureTarget,
   type SimulatorDeviceState
 } from '../../shared/simulator'
+import { androidScreenshot, readAndroidState, runAndroidAction } from './android-actions'
 import { platform } from '../platform'
 
 /**
@@ -40,6 +42,9 @@ async function simctl(args: string[], opts: { input?: string; timeout?: number }
         clearTimeout(timer)
         code === 0 ? resolve(out) : reject(new Error(err.trim().split('\n').pop() || `simctl exited ${code}`))
       })
+      // simctl exiting before it read stdin (a bad bundle id) is an EPIPE event, not a throw; the
+      // exit handler above already reports why.
+      child.stdin.on('error', (e) => console.warn('[simulator] simctl stdin:', e.message))
       child.stdin.end(opts.input)
     })
   }
@@ -47,7 +52,7 @@ async function simctl(args: string[], opts: { input?: string; timeout?: number }
   return stdout
 }
 
-function errorText(e: unknown): string {
+export function errorText(e: unknown): string {
   const raw = String((e as { stderr?: string }).stderr || (e as Error).message || e)
   const line = raw.split('\n').map((l) => l.trim()).filter(Boolean).pop() ?? 'failed'
   return line.replace(/^An error was encountered processing the command \([^)]*\):\s*/i, '')
@@ -68,6 +73,11 @@ const BIOMETRIC = {
 const MEDIA_EXT = /\.(png|jpe?g|gif|heic|heif|webp|mov|mp4|m4v)$/i
 
 export async function runSimulatorAction(udidRaw: unknown, raw: unknown): Promise<SimulatorActionResult> {
+  const avd = typeof udidRaw === 'string' ? avdNameOf(udidRaw) : null
+  if (avd) {
+    const action = normalizeSimulatorAction(raw)
+    return action ? runAndroidAction(avd, action) : { ok: false, error: 'That action is not available.' }
+  }
   if (process.platform !== 'darwin') return { ok: false, error: 'iOS simulators need macOS.' }
   if (typeof udidRaw !== 'string' || !SIMULATOR_UDID.test(udidRaw)) return { ok: false, error: 'Pick a simulator.' }
   const udid = udidRaw.toUpperCase()
@@ -165,12 +175,16 @@ async function perform(udid: string, a: SimulatorAction): Promise<SimulatorActio
     case 'open-devicehub':
       await run('/usr/bin/open', ['-b', 'com.apple.dt.Devices'], { timeout: 15_000 })
       return { ok: true }
+    case 'clipboard-set':
+      return { ok: false, error: 'Not available on iOS (⌘V syncs the clipboard instead).' }
   }
 }
 
 /** The settings the menu shows a ✓ for, plus the location scenarios to list. Each part is read on
  *  its own: one that fails (an old runtime, a setting a platform lacks) is simply absent. */
 export async function readSimulatorState(udidRaw: unknown): Promise<SimulatorDeviceState> {
+  const avd = typeof udidRaw === 'string' ? avdNameOf(udidRaw) : null
+  if (avd) return readAndroidState(avd)
   if (process.platform !== 'darwin' || typeof udidRaw !== 'string' || !SIMULATOR_UDID.test(udidRaw)) return {}
   const udid = udidRaw.toUpperCase()
   const read = (args: string[]) => simctl(args, { timeout: 15_000 }).then((s) => s.trim()).catch(() => '')
@@ -206,25 +220,30 @@ export function parseLocationScenarios(text: string): string[] {
 
 // ── Capture ────────────────────────────────────────────────────────────────────────────────────
 
-function stamp(): string {
+export function stamp(): string {
   const d = new Date()
   const p = (n: number) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} at ${p(d.getHours())}.${p(d.getMinutes())}.${p(d.getSeconds())}`
 }
 
-function safeName(s: string): string {
+export function safeName(s: string): string {
   return s.replace(/[^A-Za-z0-9 ()._-]/g, '').trim().slice(0, 60) || 'Simulator'
 }
 
 /** Where captures land: the Desktop, as DeviceHub/Simulator.app put them; the canvas copy goes in
  *  nodeterm's own folder so dropping it on the canvas does not litter the Desktop. */
-async function captureDir(target: SimulatorCaptureTarget): Promise<string> {
+export async function captureDir(target: SimulatorCaptureTarget): Promise<string> {
   const dir = target === 'desktop' ? path.join(os.homedir(), 'Desktop') : path.join(platform().userDataDir, 'simulator-captures')
   await mkdir(dir, { recursive: true })
   return dir
 }
 
 export async function takeScreenshot(udidRaw: unknown, screenIdRaw: unknown, targetRaw: unknown, nameRaw: unknown): Promise<SimulatorActionResult & { path?: string }> {
+  const avd = typeof udidRaw === 'string' ? avdNameOf(udidRaw) : null
+  if (avd) {
+    const target: SimulatorCaptureTarget = targetRaw === 'clipboard' || targetRaw === 'canvas' ? targetRaw : 'desktop'
+    return androidScreenshot(avd, target, String(nameRaw ?? ''))
+  }
   if (process.platform !== 'darwin' || typeof udidRaw !== 'string' || !SIMULATOR_UDID.test(udidRaw)) return { ok: false, error: 'Pick a simulator.' }
   const target: SimulatorCaptureTarget = targetRaw === 'clipboard' || targetRaw === 'canvas' ? targetRaw : 'desktop'
   const screenId = Number.isInteger(screenIdRaw) && (screenIdRaw as number) > 0 ? (screenIdRaw as number) : undefined
@@ -245,6 +264,7 @@ export async function takeScreenshot(udidRaw: unknown, screenIdRaw: unknown, tar
 const recordings = new Map<string, { child: ChildProcess; file: string }>()
 
 export async function startRecording(udidRaw: unknown, screenIdRaw: unknown, nameRaw: unknown): Promise<SimulatorActionResult> {
+  if (typeof udidRaw === 'string' && avdNameOf(udidRaw)) return { ok: false, error: 'Recording an Android device is not supported yet.' }
   if (process.platform !== 'darwin' || typeof udidRaw !== 'string' || !SIMULATOR_UDID.test(udidRaw)) return { ok: false, error: 'Pick a simulator.' }
   const udid = udidRaw.toUpperCase()
   if (recordings.has(udid)) return { ok: false, error: 'Already recording this simulator.' }

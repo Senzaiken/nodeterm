@@ -392,6 +392,8 @@ export const IPC = {
   runSignal: 'run:signal',
   runWatch: 'run:watch',
   // Simulator node (core/simulator/simulator-service.ts): live screen + touch/keys/buttons.
+  simulatorDevices: 'simulator:devices',
+  simulatorBoot: 'simulator:boot',
   simulatorStart: 'simulator:start',
   simulatorStop: 'simulator:stop',
   simulatorInput: 'simulator:input',

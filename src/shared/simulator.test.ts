@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  normalizeDeviceId,
+  simulatorPlatformOf,
   afterTouch,
   UNANSWERED_TOUCHES_FOR_HINT,
   ORIENTATION_DEGREES,
@@ -213,5 +215,21 @@ describe('afterTouch', () => {
     const s = afterTouch(UNANSWERED_TOUCHES_FOR_HINT + 4, true)
     expect(s).toEqual({ count: 0, hint: false })
     expect(afterTouch(s.count, false).hint).toBe(false)
+  })
+})
+
+describe('Android device ids', () => {
+  it('tells the platforms apart and keeps an AVD name as written', () => {
+    expect(simulatorPlatformOf('avd:Pixel_9')).toBe('android')
+    expect(simulatorPlatformOf('0A1B2C3D-0000-4000-8000-00000000000A')).toBe('ios')
+    expect(simulatorPlatformOf('avd:../x')).toBeNull()
+    expect(normalizeDeviceId('avd:Pixel_9')).toBe('avd:Pixel_9')
+    expect(normalizeSimulatorConfig({ udid: 'avd:Pixel_9', name: 'Pixel 9' })).toEqual({ udid: 'avd:Pixel_9', name: 'Pixel 9' })
+  })
+
+  it('validates the clipboard action', () => {
+    expect(normalizeSimulatorAction({ a: 'clipboard-set', text: 'hi' })).toEqual({ a: 'clipboard-set', text: 'hi' })
+    expect(normalizeSimulatorAction({ a: 'clipboard-set', text: 'a\u0000b' })).toBeNull()
+    expect(normalizeSimulatorAction({ a: 'clipboard-set', text: 'x'.repeat(64_001) })).toBeNull()
   })
 })

@@ -341,7 +341,9 @@ export function buildStubApi(): Omit<
       importImage: U('wallpaper.importImage')
     },
     simulator: {
-      // macOS DESKTOP only, deliberately not bridged: the helper talks to the simulator frameworks
+      devices: () => Promise.resolve({ devices: [] }),
+      boot: () => Promise.resolve({ ok: false as const, error: 'Simulator views are only available in the desktop app.' }),
+      // DESKTOP only, deliberately not bridged: the helper talks to the simulator frameworks
       // of the machine it runs on, and a Server Edition / relay tab's canvas is on another one. The
       // node is not offered there; these say why if reached anyway.
       start: () => Promise.resolve({ ok: false as const, error: 'Simulator views are only available in the macOS desktop app.' }),

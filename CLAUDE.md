@@ -1985,9 +1985,10 @@ session.
   through typed `objc_msgSend`. Input from the renderer is re-validated (`normalizeSimulatorInput`)
   before it reaches the helper. A run node with a simulator device shows a 📱 button that opens (or
   focuses) the Simulator node for it. Booting a simulator opens DeviceHub (`open -b
-  com.apple.dt.Devices`) — Simulator.app is not supported. **macOS desktop only**: the add rows are
-  disabled with `SIMULATOR_UNAVAILABLE_HINT` elsewhere, and the bridge/relay stub refuses (the helper
-  must run on the Mac that has the simulators). Kanban: not a card. Mobile: N/A.
+  com.apple.dt.Devices`) — Simulator.app is not supported. **Desktop only** (iOS devices
+  need macOS; Android ones run everywhere): the add rows are disabled with
+  `SIMULATOR_UNAVAILABLE_HINT` in a browser tab, and the bridge/relay stub refuses (the devices must
+  be on the machine running the app). Kanban: not a card. Mobile: N/A.
   **A device takes input from its FIRST HID client only** (MEASURED: a second client's touches are
   dropped without an error). So the host runs ONE helper per device, shared by every node showing
   it (`bridges` keyed by UDID, a late joiner replayed the last displays/ready), and booting a
@@ -2006,6 +2007,30 @@ session.
   (`normalizeSimulatorAction`) and every argument is its own argv entry. All the simctl actions
   were run live against an iOS 27 simulator; `simctl location list` is a TABLE
   (`parseLocationScenarios` reads the first column).
+  **Android virtual devices** use the same node (`core/simulator/android-*.ts`). A device id is
+  `avd:<name>` (the AVD name is stable; adb serials are not) in the same persisted `udid` field.
+  The picker lists every AVD read from files (`<avdHome>/<name>.ini` → `config.ini`; no
+  avdmanager, which needs a JDK), booted ones from the emulator's discovery files
+  (`…/avd/running/pid_<pid>.ini`, pid checked: a crash leaves the file). Boot runs
+  `emulator -avd <name> -no-window`, headless like iOS, logging to `<userData>/android-emulator/`.
+  Everything streams over the emulator's own gRPC interface, spoken with a hand-written protobuf
+  codec over `node:http2` (`android-grpc.ts`, no dependency), authenticated with the per-run
+  `grpc.token` from the discovery file. MEASURED (emulator 36.6.11): PNG frames fitted into a
+  SQUARE box (one box serves both orientations; width alone is ignored) run ~25 fps while moving
+  and send nothing while still; keys need the full USB usage (`0x70000 | usage`, a bare usage
+  types nothing); Home/Back/Recents/Power are W3C key names (`GoHome`, `GoBack`, `AppSwitch`,
+  `Power`); rotation is `setPhysicalModel` ROTATION z (90 = turned left) and frames then arrive
+  ALREADY TURNED while touches stay in PORTRAIT panel pixels — so the node does not turn an Android
+  picture (`picturePreRotated`) but maps touches with the same `displayToFramebuffer`. A rotation
+  of a portrait-locked app changes no guest pixels, so the stream sends nothing; the session takes
+  a `getScreenshot` after each rotation. Input is queued and sent one call at a time (drag points
+  coalesced) so it reaches the emulator in order. ⌘V sets the device clipboard (`setClipboard`)
+  and presses Ctrl+V. Menu actions use gRPC where it exists (battery, GPS, clipboard, fingerprint,
+  restart, shutdown, screenshots) and `adb -s emulator-<port>` otherwise (night mode, font scale,
+  demo-mode status bar, URLs, APK installs, media) — every `adb shell` argument single-quoted for
+  the DEVICE's shell. Not yet: screen recording, wipe data, foldables, the run node's 📱 for an
+  Android emulator. The node is offered in the desktop app on every OS (iOS devices are simply
+  absent off macOS); the Server Edition still refuses it.
 - **dino** (`DinoNode.tsx`) — a small self-contained T-Rex-style runner on a canvas (no PTY);
   high score persists via `data.highScore`.
 - **trigger** (`TriggerNode.tsx`) — a canvas-owned schedule (cron / interval / once) that
