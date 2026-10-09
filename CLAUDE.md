@@ -2026,6 +2026,22 @@ session.
   node's size is the user's — and the run bar flexes to fill the node; opening grows the node by
   `INLINE_SIM_HEIGHT`, closing hands that back. Inline there is no node of its own to snap to the
   screen's shape, so Actual Size / Fit to Screen are greyed out there (pop out for those).
+  **The browser panel** (`@shared/run-preview`) is the same idea for a run whose result is a page:
+  the button shows 🌐 instead of 📱 when `previewKindFor` says so — a `chrome`/`msedge` launch
+  configuration, a Flutter web device (`chrome`, `edge`, `web-server`), or a run with no device
+  (a dev server). `data.runBrowser` (persisted, http(s) only) holds the page: a browser
+  configuration's own `url` (its Run/Open now lands in this panel, or in a panel popped out of it,
+  instead of a separate browser node), else the URL picked out of the run's own output by
+  `localUrlFromOutput` (the newest local http(s) URL on a "served at / Local: / listening on" line;
+  DevTools / VM-service lines skipped; `0.0.0.0` opened as `localhost`), polled with `pty.capture`
+  only while the panel is open, the run is up and no page is known. A picked-out URL is marked
+  `auto` and re-read on the next run (the port may change); one the person navigated to is kept.
+  While the panel is open, a Flutter `chrome`/`edge` device runs as `web-server`
+  (`deviceForBrowserPanel`): Chrome would open a window of Flutter's own, the web server serves the
+  same app to any browser, and prints its URL. ⇱ pops it into a browser node with `dockTo`; its ⇲
+  (`nodeterm:dock-preview`, shared with the Simulator node) or 🌐 docks it back. A run node holds
+  one panel at a time. The inline page is not part of the browser-node keep-alive pool, so a
+  project switch reloads it.
   **Android virtual devices** use the same node (`core/simulator/android-*.ts`). A device id is
   `avd:<name>` (the AVD name is stable; adb serials are not) in the same persisted `udid` field.
   The picker lists every AVD read from files (`<avdHome>/<name>.ini` → `config.ini`; no
