@@ -2027,8 +2027,9 @@ session.
   `INLINE_SIM_HEIGHT`, closing hands that back. Inline there is no node of its own to snap to the
   screen's shape, so Actual Size / Fit to Screen are greyed out there (pop out for those).
   **The browser panel** (`@shared/run-preview`) is the same idea for a run whose result is a page:
-  the button offers both (a menu: simulator / browser, the run's own kind marked "this run" and
-  shown on the button as 📱 or 🌐 per `previewKindFor` — a `chrome`/`msedge` launch configuration,
+  there is NO choice — a node runs one thing, so the button shows the panel the run calls for (📱
+  or 🌐, `previewKindFor`), and an OPEN panel follows the run (switch the device to Chrome and the
+  simulator becomes the browser, and back) — a `chrome`/`msedge` launch configuration,
   a Flutter web device, picked OR named by the configuration itself (`-d chrome` in its args — a
   rule that read only the picker showed 📱 for exactly those runs), or a run with no device, i.e.
   a dev server). `data.runBrowser` (persisted, http(s) only) holds the page: a browser
@@ -2043,7 +2044,7 @@ session.
   `--device-id` / `-d=` in args or toolArgs, or Dart-Code's `deviceId` field (which used to be
   dropped, not passed as `-d`) — because Chrome would open a window of Flutter's own while the web
   server serves the same app to any browser and prints its URL; Run then opens the browser panel
-  by itself. `runConfig.embedBrowser: false` (the menu's "Run Flutter web inside this node")
+  by itself. `runConfig.embedBrowser: false` (⋯ → "Show web inside this node", shown for a Flutter web run)
   restores Flutter's own Chrome window. ⇱ pops it into a browser node with `dockTo`; its ⇲
   (`nodeterm:dock-preview`, shared with the Simulator node) or 🌐 docks it back. A run node holds
   one panel at a time. The inline page is not part of the browser-node keep-alive pool, so a

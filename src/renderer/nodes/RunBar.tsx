@@ -15,7 +15,6 @@ import { isShellCommand } from '@shared/agents/pane'
 import { SIMULATOR_UDID } from '@shared/run-config'
 import { INLINE_SIM_HEIGHT, type InlineSimulatorConfig, type SimulatorNodeConfig } from '@shared/simulator'
 import { SimulatorView } from './SimulatorNode'
-import { ContextMenu, type MenuItem } from '../components/ContextMenu'
 import { BrowserSurface } from './BrowserSurface'
 import {
   isWebDeviceId,
@@ -560,21 +559,19 @@ export function RunBar({ nodeId, config, autoStart, simulator, browser: browserP
   // browser device, which shows here unless `embedBrowser` is off.
   const runDevice = entry?.usesDevice ? (entry.pinnedDevice ?? config.deviceId) : undefined
   const flutterWebRun = isWebDeviceId(runDevice)
-  const [previewMenuAt, setPreviewMenuAt] = useState<{ x: number; y: number } | null>(null)
 
-  /** The button: hides an open panel, docks a popped-out one back, and otherwise offers both kinds
-   *  (the one this run calls for marked) — a run can want either. */
-  const onPreviewButton = (e: React.MouseEvent) => {
+  /** The button: hides an open panel, docks a popped-out one back, and otherwise shows the one this
+   *  run calls for — a node runs one thing, so it is never a choice. */
+  const onPreviewButton = () => {
     if (panelOpen) return setPreview(undefined)
     if (poppedOut) return dockBack(poppedOut.id)
-    const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
-    setPreviewMenuAt({ x: r.right - 220, y: r.bottom + 4 })
+    void openPreview(previewKind)
   }
 
   const openPreview = async (kind: PreviewKind) => {
     if (kind === 'browser') {
       if (flutterWebRun && running && config.embedBrowser === false) {
-        say('info', 'This Flutter web run is in its own Chrome window — turn on “Run Flutter web inside this node” and run again to show it here.')
+        say('info', 'This Flutter web run is in its own Chrome window — turn on ⋯ → “Show web inside this node” and run again to show it here.')
       }
       setPreview({ kind: 'browser', cfg: await browserUrlNow() })
       return
@@ -589,20 +586,14 @@ export function RunBar({ nodeId, config, autoStart, simulator, browser: browserP
     setPreview({ kind: 'simulator', cfg: next })
   }
 
-  const previewMenu: MenuItem[] = [
-    { label: `Show a simulator here${previewKind === 'simulator' ? '  · this run' : ''}`, onClick: () => void openPreview('simulator') },
-    { label: `Show a browser here${previewKind === 'browser' ? '  · this run' : ''}`, onClick: () => void openPreview('browser') },
-    ...(flutterWebRun
-      ? ([
-          { type: 'separator' },
-          {
-            label: `${config.embedBrowser === false ? '' : '✓ '}Run Flutter web inside this node`,
-            hint: 'On: Flutter’s web server serves the app to this node. Off: Flutter opens its own Chrome window.',
-            onClick: () => patch({ embedBrowser: config.embedBrowser === false ? undefined : false }, { changesRun: true })
-          }
-        ] as MenuItem[])
-      : [])
-  ]
+  // An open panel follows the run: pick a browser device and the simulator becomes the browser, and
+  // the other way round. The popped-out kind is left alone (the person moved it out on purpose).
+  const openPreviewRef = useRef(openPreview)
+  openPreviewRef.current = openPreview
+  const openKind: PreviewKind | null = simulator ? 'simulator' : browserPanel ? 'browser' : null
+  useEffect(() => {
+    if (openKind && openKind !== previewKind) void openPreviewRef.current(previewKind)
+  }, [openKind, previewKind])
 
   /** ⇱: the panel becomes its own node beside this one, which can dock back. */
   const popOut = () => {
@@ -740,7 +731,7 @@ export function RunBar({ nodeId, config, autoStart, simulator, browser: browserP
     (entry && !entry.supported ? entry.reason : null)
 
   return (
-    <div ref={barRef} className={`run-bar nodrag nowheel${showTerminal ? '' : ' run-bar--compact'}${simulator ? ' run-bar--sim' : ''}`}>
+    <div ref={barRef} className={`run-bar nodrag nowheel${showTerminal ? '' : ' run-bar--compact'}${panelOpen ? ' run-bar--sim' : ''}`}>
       <div className="run-bar__row">
         <select
           className="run-bar__select run-bar__select--folder"
@@ -925,6 +916,19 @@ export function RunBar({ nodeId, config, autoStart, simulator, browser: browserP
               e.stopPropagation()
             }}
           />
+          {flutterWebRun && (
+            <label
+              className="run-bar__check"
+              title="On: Flutter’s web server serves the app to the browser inside this node. Off: Flutter opens its own Chrome window."
+            >
+              <input
+                type="checkbox"
+                checked={config.embedBrowser !== false}
+                onChange={(e) => patch({ embedBrowser: e.target.checked ? undefined : false }, { changesRun: true })}
+              />
+              Show web inside this node
+            </label>
+          )}
         </div>
       )}
 
@@ -932,9 +936,6 @@ export function RunBar({ nodeId, config, autoStart, simulator, browser: browserP
         <div className={`run-bar__note run-bar__note--${note?.kind ?? 'error'}`}>{note?.text ?? blocker}</div>
       )}
 
-      {previewMenuAt && (
-        <ContextMenu x={previewMenuAt.x} y={previewMenuAt.y} items={previewMenu} onClose={() => setPreviewMenuAt(null)} />
-      )}
       {browserPanel && (
         <div ref={panelRef} className="run-sim-host">
           <div className="run-web">
