@@ -1,5 +1,5 @@
 import { execFile, spawn } from 'node:child_process'
-import { mkdir, open, readdir, stat } from 'node:fs/promises'
+import { mkdir, open, readFile, readdir, stat } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
@@ -249,9 +249,10 @@ export async function runningEmulators(): Promise<RunningEmulator[]> {
       if (!m) continue
       const pid = Number(m[1])
       if (!pidAlive(pid)) continue
-      // Unreadable = being written or removed.
-      const text = await readSmallFile(path.join(dir, name), 64 * 1024)
-      const e = text === null ? null : parseDiscovery(text, pid)
+      // One plain read, no separate check (the discovery dir is under the OS temp dir, so the file
+      // is never opened by handle there). Unreadable = being written or removed.
+      const text = await readFile(path.join(dir, name), 'utf8').catch(() => null)
+      const e = text === null || text.length > 64 * 1024 ? null : parseDiscovery(text, pid)
       if (e) out.push(e)
     }
   }
