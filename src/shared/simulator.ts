@@ -12,6 +12,61 @@ export interface SimulatorNodeConfig {
   udid?: string
   /** Its name when picked, so the node can label it before devices load. */
   name?: string
+  /** How the device is held. Absent = portrait. */
+  orientation?: SimulatorOrientation
+}
+
+// ── Orientation ────────────────────────────────────────────────────────────────────────────────
+//
+// Rotating a device is two things: the helper tells iOS (a GSEvent to PurpleWorkspacePort), and the
+// node turns the picture — the framebuffer always stays portrait while iOS draws its content rotated
+// inside it, exactly as a real panel does. Touches are then mapped back from the turned picture to
+// framebuffer coordinates. MEASURED (Xcode 27, iPad): Purple value 3 lays the UI out upright for a
+// device turned LEFT (counter-clockwise: dock on the framebuffer's left edge), 4 for one turned right.
+
+export type SimulatorOrientation = 'portrait' | 'landscape-left' | 'landscape-right' | 'portrait-upside-down'
+
+const ORIENTATIONS: readonly SimulatorOrientation[] = ['portrait', 'landscape-left', 'portrait-upside-down', 'landscape-right']
+
+/** The GSEvent orientation value the helper sends for each. */
+export const ORIENTATION_PURPLE: Readonly<Record<SimulatorOrientation, number>> = {
+  portrait: 1,
+  'portrait-upside-down': 2,
+  'landscape-left': 3,
+  'landscape-right': 4
+}
+
+/** How far the picture is turned on screen, clockwise, in degrees. */
+export const ORIENTATION_DEGREES: Readonly<Record<SimulatorOrientation, 0 | 90 | 180 | 270>> = {
+  portrait: 0,
+  'landscape-right': 90,
+  'portrait-upside-down': 180,
+  'landscape-left': 270
+}
+
+export function isSimulatorOrientation(v: unknown): v is SimulatorOrientation {
+  return typeof v === 'string' && (ORIENTATIONS as readonly string[]).includes(v)
+}
+
+/** Turn the device a quarter turn left (counter-clockwise) or right. */
+export function rotateOrientation(o: SimulatorOrientation, dir: 'left' | 'right'): SimulatorOrientation {
+  const i = ORIENTATIONS.indexOf(o)
+  return ORIENTATIONS[(i + (dir === 'left' ? 1 : 3)) % 4]
+}
+
+/** A point on the turned picture (0..1 of what is shown) → the same point in the portrait
+ *  framebuffer the digitizer expects. */
+export function displayToFramebuffer(u: number, v: number, o: SimulatorOrientation): { x: number; y: number } {
+  switch (o) {
+    case 'landscape-left': // picture turned 90° counter-clockwise
+      return { x: 1 - v, y: u }
+    case 'landscape-right': // picture turned 90° clockwise
+      return { x: v, y: 1 - u }
+    case 'portrait-upside-down':
+      return { x: 1 - u, y: 1 - v }
+    default:
+      return { x: u, y: v }
+  }
 }
 
 // eslint-disable-next-line no-control-regex
@@ -27,6 +82,7 @@ export function normalizeSimulatorConfig(raw: unknown): SimulatorNodeConfig {
     out.udid = r.udid.toUpperCase()
     if (typeof r.name === 'string' && r.name.trim() && r.name.length <= 200 && !CONTROL.test(r.name)) out.name = r.name.trim()
   }
+  if (isSimulatorOrientation(r.orientation) && r.orientation !== 'portrait') out.orientation = r.orientation
   return out
 }
 
@@ -42,6 +98,7 @@ export type SimulatorInput =
   | { t: 'key'; usage: number; down: boolean }
   | { t: 'button'; name: SimulatorButton }
   | { t: 'display'; index: number }
+  | { t: 'orientation'; value: number }
 
 /** The only commands that reach the helper, re-built field by field (renderer input is untrusted
  *  in the Server Edition and the relay; the helper also clamps). */
@@ -64,6 +121,10 @@ export function normalizeSimulatorInput(raw: unknown): SimulatorInput | null {
     }
     case 'button':
       return BUTTONS.includes(r.name as SimulatorButton) ? { t: 'button', name: r.name as SimulatorButton } : null
+    case 'orientation': {
+      const value = Number(r.value)
+      return Number.isInteger(value) && value >= 1 && value <= 4 ? { t: 'orientation', value } : null
+    }
     case 'display': {
       const index = Number(r.index)
       return Number.isInteger(index) && index >= -1 && index < 16 ? { t: 'display', index } : null

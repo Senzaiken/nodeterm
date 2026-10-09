@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
+  ORIENTATION_DEGREES,
+  ORIENTATION_PURPLE,
   displayLabel,
+  displayToFramebuffer,
   hidUsageForCode,
+  rotateOrientation,
+  type SimulatorOrientation,
   normalizeSimulatorConfig,
   normalizeSimulatorInput,
   pointerToScreenRatio
@@ -75,5 +80,50 @@ describe('displayLabel', () => {
     expect(displayLabel(inner, [inner, cover])).toBe('Inner')
     expect(displayLabel(cover, [inner, cover])).toBe('Cover')
     expect(displayLabel(cover, [cover])).toBe('Screen')
+  })
+})
+
+describe('orientation', () => {
+  it('turns a quarter at a time and comes back round', () => {
+    let o: SimulatorOrientation = 'portrait'
+    const seen: SimulatorOrientation[] = []
+    for (let i = 0; i < 4; i++) seen.push((o = rotateOrientation(o, 'left')))
+    expect(seen).toEqual(['landscape-left', 'portrait-upside-down', 'landscape-right', 'portrait'])
+    expect(rotateOrientation('portrait', 'right')).toBe('landscape-right')
+    expect(rotateOrientation(rotateOrientation('landscape-left', 'right'), 'left')).toBe('landscape-left')
+  })
+
+  it('maps a click on the turned picture back to the same framebuffer point the picture was drawn from', () => {
+    // The node draws framebuffer (x,y) at this canvas point (SimulatorNode.paint's transforms).
+    const draw = (x: number, y: number, o: SimulatorOrientation) => {
+      switch (ORIENTATION_DEGREES[o]) {
+        case 90: return { u: 1 - y, v: x }
+        case 180: return { u: 1 - x, v: 1 - y }
+        case 270: return { u: y, v: 1 - x }
+        default: return { u: x, v: y }
+      }
+    }
+    for (const o of ['portrait', 'landscape-left', 'landscape-right', 'portrait-upside-down'] as SimulatorOrientation[]) {
+      for (const [x, y] of [[0, 0], [1, 0], [0.25, 0.75], [0.9, 0.1]]) {
+        const { u, v } = draw(x, y, o)
+        const back = displayToFramebuffer(u, v, o)
+        expect(back.x).toBeCloseTo(x)
+        expect(back.y).toBeCloseTo(y)
+      }
+    }
+  })
+
+  it('turns the picture counter-clockwise for a device turned left (measured: Purple 3 = dock on the left edge)', () => {
+    expect(ORIENTATION_PURPLE['landscape-left']).toBe(3)
+    expect(ORIENTATION_DEGREES['landscape-left']).toBe(270)
+    // The framebuffer's top-left corner ends up bottom-left on screen.
+    expect(displayToFramebuffer(0, 1, 'landscape-left')).toEqual({ x: 0, y: 0 })
+  })
+
+  it('persists a non-portrait orientation and accepts only Purple values 1–4', () => {
+    expect(normalizeSimulatorConfig({ udid: UDID, orientation: 'landscape-left' })).toEqual({ udid: UDID, orientation: 'landscape-left' })
+    expect(normalizeSimulatorConfig({ udid: UDID, orientation: 'sideways' })).toEqual({ udid: UDID })
+    expect(normalizeSimulatorInput({ t: 'orientation', value: 3 })).toEqual({ t: 'orientation', value: 3 })
+    expect(normalizeSimulatorInput({ t: 'orientation', value: 7 })).toBeNull()
   })
 })

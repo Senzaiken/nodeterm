@@ -17,11 +17,13 @@
  *             {"t":"key","usage":N,"down":bool}            HID keyboard usage (page 7)
  *             {"t":"button","name":"home"|"lock"|"siri"|"volup"|"voldown"}
  *             {"t":"display","index":N|-1}                 pin a display; -1 = automatic
+ *             {"t":"orientation","value":1..4}             GSEvent orientation (Purple values:
+ *                                                          1 portrait, 2 upside down, 3/4 landscape)
  *   stderr  one JSON status line per event: {"ok":…} / {"error":…}
  *
  * Kept free of backticks and dollar-brace sequences so it can live in a TypeScript string.
  */
-export const SIMBRIDGE_VERSION = 1
+export const SIMBRIDGE_VERSION = 2
 
 export const SIMBRIDGE_SOURCE = String.raw`
 import CoreGraphics
@@ -328,6 +330,37 @@ let messageForButton: ButtonFn? = dlsym(sk, "IndigoHIDMessageForButton").map { u
   }
 }
 
+// ── Orientation ────────────────────────────────────────────────────────────────────────────────
+// A GSEvent "device orientation changed" (type 50) as a raw mach message to SpringBoard's
+// PurpleWorkspacePort, looked up in the device's bootstrap namespace — the layout from idb's
+// SimulatorPurpleHID. The framebuffer itself stays portrait; iOS draws rotated content into it.
+typealias LookupFn = @convention(c) (AnyObject, Selector, NSString, UnsafeMutablePointer<NSError?>?) -> UInt32
+let purpleQueue = DispatchQueue(label: "nt.simbridge.purple")
+@Sendable func orientation(_ value: UInt32) {
+  purpleQueue.async {
+    var lookupErr: NSError?
+    let port = unsafeBitCast(msgSend, to: LookupFn.self)(device, NSSelectorFromString("lookup:error:"), "PurpleWorkspacePort" as NSString, &lookupErr)
+    guard port != 0 else {
+      status(["error": "orientation", "message": "PurpleWorkspacePort unavailable: " + (lookupErr?.localizedDescription ?? "nil")])
+      return
+    }
+    var buf = [UInt8](repeating: 0, count: 112)
+    func put(_ v: UInt32, _ at: Int) { withUnsafeBytes(of: v.littleEndian) { for i in 0..<4 { buf[at + i] = $0[i] } } }
+    put(0x13, 0x00)              // msgh_bits: MACH_MSG_TYPE_COPY_SEND
+    put(108, 0x04)               // msgh_size
+    put(port, 0x08)              // msgh_remote_port
+    put(0x7B, 0x14)              // msgh_id
+    put(50 | 0x2_0000, 0x18)     // GSEvent type: device orientation changed | host flag
+    put(4, 0x48)                 // payload length
+    put(value, 0x4C)             // the orientation
+    let kr = buf.withUnsafeMutableBytes { raw -> kern_return_t in
+      let header = raw.baseAddress!.assumingMemoryBound(to: mach_msg_header_t.self)
+      return mach_msg(header, MACH_SEND_MSG | MACH_SEND_TIMEOUT, header.pointee.msgh_size, 0, mach_port_t(MACH_PORT_NULL), 2000, mach_port_t(MACH_PORT_NULL))
+    }
+    if kr != KERN_SUCCESS { status(["error": "orientation", "message": "rotate failed: " + String(cString: mach_error_string(kr))]) }
+  }
+}
+
 // ── Commands ───────────────────────────────────────────────────────────────────────────────────
 DispatchQueue.global().async {
   while let line = readLine() {
@@ -343,6 +376,9 @@ DispatchQueue.global().async {
       send(messageForKey(Int32(usage), down ? 1 : 2))
     case "button":
       button((cmd["name"] as? String) ?? "")
+    case "orientation":
+      guard let v = cmd["value"] as? Int, (1...4).contains(v) else { continue }
+      orientation(UInt32(v))
     case "display":
       guard let i = cmd["index"] as? Int else { continue }
       frameQueue.async {

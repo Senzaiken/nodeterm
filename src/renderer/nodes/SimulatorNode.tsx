@@ -1,12 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { NodeResizer, useReactFlow, type NodeProps } from '@xyflow/react'
 import {
+  ORIENTATION_DEGREES,
+  ORIENTATION_PURPLE,
   displayLabel,
+  displayToFramebuffer,
   hidUsageForCode,
+  rotateOrientation,
   pointerToScreenRatio,
   type SimulatorDisplayInfo,
   type SimulatorInput,
   type SimulatorNodeConfig,
+  type SimulatorOrientation,
   type SimulatorStatusEvent
 } from '@shared/simulator'
 import type { RunDevice } from '@shared/run-config'
@@ -35,6 +40,13 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
   const { updateNodeData, deleteElements } = useReactFlow()
   const config = (data.simulator as SimulatorNodeConfig | undefined) ?? {}
   const udid = config.udid
+  const orientation: SimulatorOrientation = config.orientation ?? 'portrait'
+  // Read by the draw loop and the input path, which live in long-lived closures.
+  const orientationRef = useRef(orientation)
+  orientationRef.current = orientation
+  /** The newest decoded frame, kept so a rotation can redraw it even when the device sends no new
+   *  frame (an app that does not rotate leaves the framebuffer unchanged). */
+  const lastBitmap = useRef<ImageBitmap | null>(null)
 
   const [devices, setDevices] = useState<RunDevice[] | null>(null)
   const [phase, setPhase] = useState<Phase>('idle')
@@ -58,6 +70,31 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
     [api]
   )
   useEffect(() => loadDevices(false), [loadDevices])
+
+  /** Draw the newest frame, turned to match how the device is held: the framebuffer is always
+   *  portrait and iOS draws rotated content into it, so the picture is turned, as on a real panel. */
+  const paint = useCallback(() => {
+    const canvas = canvasRef.current
+    const b = lastBitmap.current
+    if (!canvas || !b) return
+    const deg = ORIENTATION_DEGREES[orientationRef.current]
+    const w = deg % 180 ? b.height : b.width
+    const h = deg % 180 ? b.width : b.height
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w
+      canvas.height = h
+    }
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+    ctx.setTransform(1, 0, 0, 1, 0, 0)
+    if (deg === 90) ctx.setTransform(0, 1, -1, 0, w, 0)
+    else if (deg === 180) ctx.setTransform(-1, 0, 0, -1, w, h)
+    else if (deg === 270) ctx.setTransform(0, -1, 1, 0, 0, h)
+    ctx.drawImage(b, 0, 0)
+    ctx.setTransform(1, 0, 0, 1, 0, 0)
+    setFrameSize((s) => (s && s.w === w && s.h === h ? s : { w, h }))
+  }, [])
+  useEffect(() => paint(), [orientation, paint])
 
   // ── Stream ───────────────────────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -90,17 +127,12 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
           if (!raf) {
             raf = requestAnimationFrame(() => {
               raf = 0
-              const canvas = canvasRef.current
-              if (!pending || !canvas) return
-              const { bitmap: b, w, h } = pending
+              if (!pending) return
+              const { bitmap } = pending
               pending = null
-              if (canvas.width !== w || canvas.height !== h) {
-                canvas.width = w
-                canvas.height = h
-              }
-              canvas.getContext('2d')?.drawImage(b, 0, 0)
-              b.close()
-              setFrameSize((s) => (s && s.w === w && s.h === h ? s : { w, h }))
+              lastBitmap.current?.close()
+              lastBitmap.current = bitmap
+              paint()
               setPhase('live')
             })
           }
@@ -110,7 +142,10 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
     })
     const offStatus = api.simulator.onStatus(id, (e: SimulatorStatusEvent) => {
       if (!live) return
-      if (e.kind === 'displays') {
+      if (e.kind === 'ready') {
+        // Tell the device how the node holds it: after a reboot it is portrait whatever was saved.
+        void api.simulator.input(id, { t: 'orientation', value: ORIENTATION_PURPLE[orientationRef.current] })
+      } else if (e.kind === 'displays') {
         setDisplays(e.displays)
         setActiveDisplay(e.active)
         setPinned(e.pinned)
@@ -136,12 +171,34 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
       offStatus()
       if (raf) cancelAnimationFrame(raf)
       pending?.bitmap.close()
+      lastBitmap.current?.close()
+      lastBitmap.current = null
       void api.simulator.stop(id)
     }
-  }, [api, id, udid, booted])
+  }, [api, id, udid, booted, paint])
 
   // ── Input ────────────────────────────────────────────────────────────────────────────────────
-  const send = useCallback((cmd: SimulatorInput) => void api.simulator.input(id, cmd), [api, id])
+  // Touches are measured on the (turned) picture and sent in portrait framebuffer coordinates.
+  const send = useCallback(
+    (cmd: SimulatorInput) => {
+      const out =
+        cmd.t === 'down' || cmd.t === 'move' || cmd.t === 'up'
+          ? { ...cmd, ...displayToFramebuffer(cmd.x, cmd.y, orientationRef.current) }
+          : cmd
+      void api.simulator.input(id, out)
+    },
+    [api, id]
+  )
+
+  const rotate = useCallback(
+    (dir: 'left' | 'right') => {
+      const next = rotateOrientation(orientationRef.current, dir)
+      orientationRef.current = next
+      updateNodeData(id, (n) => ({ simulator: { ...(n.data.simulator as SimulatorNodeConfig | undefined), orientation: next } }))
+      void api.simulator.input(id, { t: 'orientation', value: ORIENTATION_PURPLE[next] })
+    },
+    [api, id, updateNodeData]
+  )
 
   const ratioAt = useCallback(
     (clientX: number, clientY: number) => {
@@ -214,6 +271,13 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
   // Keys go to the device as physical keys (it applies its own layout and Shift). ⌘-chords stay
   // with nodeterm so the app's own shortcuts keep working while the screen has focus.
   const onKey = (down: boolean) => (e: React.KeyboardEvent) => {
+    // ⌘← / ⌘→ rotate, as they did in Simulator.app.
+    if (phase === 'live' && e.metaKey && (e.code === 'ArrowLeft' || e.code === 'ArrowRight')) {
+      e.preventDefault()
+      e.stopPropagation()
+      if (down && !e.repeat) rotate(e.code === 'ArrowLeft' ? 'left' : 'right')
+      return
+    }
     if (phase !== 'live' || (e.metaKey && e.code !== 'MetaLeft' && e.code !== 'MetaRight')) return
     const usage = hidUsageForCode(e.code)
     if (usage === undefined) return
@@ -309,6 +373,12 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
           <span className="run-bar__spacer" />
           {phase === 'live' && (
             <>
+              <button className="run-bar__icon" title="Rotate left (⌘←)" onClick={() => rotate('left')}>
+                ↺
+              </button>
+              <button className="run-bar__icon" title="Rotate right (⌘→)" onClick={() => rotate('right')}>
+                ↻
+              </button>
               <button className="run-bar__icon" title="Home" onClick={() => send({ t: 'button', name: 'home' })}>
                 ⌂
               </button>
