@@ -30,6 +30,8 @@
 import type { ReactNode } from 'react'
 import type { MenuItem } from '../components/ContextMenu'
 import { ACCOUNT_CAPABLE_AGENT_IDS } from '@shared/agents/account-binding'
+import { isMacPlatform } from '@shared/platform-utils'
+import { isBrowserRuntime } from '../bridge/runtime'
 import {
   IconAgent,
   IconBranch,
@@ -39,6 +41,7 @@ import {
   IconExplorer,
   IconGroup,
   IconNote,
+  IconPhone,
   IconPlay,
   IconRemote,
   IconTerminal,
@@ -58,6 +61,7 @@ export type AddItem =
   | { kind: 'terminal' }
   | { kind: 'remote' }
   | { kind: 'run' } // disabledOnSsh
+  | { kind: 'simulator' } // macOS desktop only
   | { kind: 'browser' }
   | { kind: 'web' }
   | { kind: 'sticky' }
@@ -80,6 +84,7 @@ export const CONTENT_ADD_ITEMS: readonly AddItem[] = [
   { kind: 'terminal' },
   { kind: 'remote' },
   { kind: 'run' },
+  { kind: 'simulator' },
   { kind: 'browser' },
   { kind: 'web' },
   { kind: 'sticky' },
@@ -113,6 +118,8 @@ export interface AddHandlers {
   remote: (screenPos: { x: number; y: number }) => void
   /** A run node (a `.vscode/launch.json` configuration with Run/Stop/Restart), in the project folder. */
   run: (at?: AddPos) => void
+  /** A Simulator node: a live iOS simulator screen with touch, keyboard and buttons. */
+  simulator: (at?: AddPos) => void
   browser: (at?: AddPos) => void
   web: (at?: AddPos) => void
   sticky: (at?: AddPos) => void
@@ -131,6 +138,12 @@ export interface AddHandlers {
 export const WORKTREE_SSH_HINT = 'Not supported in SSH projects yet'
 /** A run node's launcher, processes and (Flutter) simulators all live on THIS machine. */
 export const RUN_SSH_HINT = 'Run configurations run on this machine — not in SSH projects yet'
+/** iOS simulators live on the Mac the desktop app runs on; a browser tab (Server Edition) is not it. */
+export const SIMULATOR_UNAVAILABLE_HINT = 'iOS simulators need the macOS desktop app'
+/** Whether this renderer can show a Simulator node (macOS, Electron — not a Server Edition tab). */
+export function simulatorAvailable(): boolean {
+  return isMacPlatform() && !isBrowserRuntime()
+}
 
 /**
  * The two rows that need a project FOLDER, shown disabled with their reason rather than hidden.
@@ -175,6 +188,17 @@ export function contentAddItemsToMenuItems(
       case 'remote':
         out.push({ label: 'New remote…', icon: <IconTerminal />, onClick: () => handlers.remote(remotePos) })
         break
+      case 'simulator': {
+        const ok = simulatorAvailable()
+        out.push({
+          label: 'New simulator',
+          icon: <IconPhone />,
+          disabled: !ok,
+          hint: ok ? undefined : SIMULATOR_UNAVAILABLE_HINT,
+          onClick: () => handlers.simulator(at)
+        })
+        break
+      }
       case 'run':
         out.push({
           label: 'New run configuration',
@@ -285,6 +309,18 @@ export function contentAddItemsToDockRows(
         // The Dock uses its own "New Remote Connection" affordance, not the remote picker. Skip
         // here so the Dock's content rows don't duplicate it.
         break
+      case 'simulator': {
+        const ok = simulatorAvailable()
+        out.push({
+          kind: 'simulator',
+          label: 'Simulator',
+          icon: <IconPhone />,
+          disabled: !ok,
+          hint: ok ? undefined : SIMULATOR_UNAVAILABLE_HINT,
+          onClick: () => handlers.simulator()
+        })
+        break
+      }
       case 'run':
         out.push({
           kind: 'run',
@@ -387,6 +423,7 @@ export const ADD_ITEM_GROUP: Record<AddItem['kind'], AddGroupId> = {
   terminal: 'top',
   remote: 'top',
   run: 'view',
+  simulator: 'view',
   browser: 'view',
   web: 'view',
   sticky: 'view',

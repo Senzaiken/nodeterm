@@ -395,7 +395,7 @@ export interface RecycledInfo {
 // 'subagent' and 'loop' are render-only (ephemeral hook-driven viz) and never persisted.
 // 'trigger' is a first-class PERSISTED kind (issue #493) — the canvas-owned schedule node; its
 // spec rides `CanvasNodeState.trigger` and is sanitized on every load path (@shared/trigger).
-export type NodeKind = 'terminal' | 'sticky' | 'group' | 'editor' | 'diff' | 'video' | 'web' | 'browser' | 'files' | 'subagent' | 'loop' | 'dino' | 'trigger'
+export type NodeKind = 'terminal' | 'sticky' | 'group' | 'editor' | 'diff' | 'video' | 'web' | 'browser' | 'files' | 'subagent' | 'loop' | 'dino' | 'trigger' | 'simulator'
 
 /** Persisted state of a single canvas node (terminal, sticky note, group frame, or editor). */
 /**
@@ -566,6 +566,8 @@ export interface CanvasNodeState {
    * `normalizeRunConfig` (@shared/run-config) on every load AND save.
    */
   runConfig?: import('./run-config').RunNodeConfig
+  /** simulator-only: which iOS simulator the node shows. Read through `normalizeSimulatorConfig`. */
+  simulator?: import('./simulator').SimulatorNodeConfig
   // sticky-only
   text?: string
   /**
@@ -4245,6 +4247,8 @@ export interface NodeTerminalApi {
   wallpaper: import('./wallpaper').WallpaperApi
   /** Run node host side (launch.json, devices, launcher, status, stop, signals, reload on save). */
   runConfig: import('./run-config').RunConfigApi
+  /** Simulator node host side (macOS desktop): live iOS simulator screen + input. */
+  simulator: import('./simulator').SimulatorApi
   triggers: TriggersApi
   context: ContextApi
   canvas: CanvasApi

@@ -39,6 +39,7 @@ import { openerByTarget, recordedOpenerOf } from '../lib/teamProgress'
 import { normalizePendingLaunch } from '@shared/pending-launch-shape'
 import { normalizeTerminalFontSize } from '../terminal/terminal-font-zoom'
 import { normalizeRunConfig, runNodeTitle, type RunNodeConfig } from '@shared/run-config'
+import { normalizeSimulatorConfig, type SimulatorNodeConfig } from '@shared/simulator'
 import { useSettings } from './settings'
 
 // Re-exported so Canvas (and anything else in the renderer) keeps importing it from here, while the
@@ -71,6 +72,8 @@ const BROWSER_SIZE = { width: 800, height: 560 }
 // Tall and narrow: a file manager is a LIST, and the thing that runs out first is vertical room
 // for entries, not horizontal room for names (which ellipsize).
 const FILES_SIZE = { width: 340, height: 460 }
+/** A phone held upright, with room for the toolbar. The screen keeps its own aspect inside. */
+const SIMULATOR_SIZE = { width: 360, height: 760 }
 
 /** Height of a node when collapsed (header only). */
 export const COLLAPSED_HEIGHT = 40
@@ -242,6 +245,8 @@ export interface NodeData {
   runConfig?: import('@shared/run-config').RunNodeConfig
   /** Run nodes only, transient: start the run on mount (a compound's sibling). Never persisted. */
   runAutoStart?: boolean
+  /** simulator-only: which iOS simulator the node shows. See @shared/simulator. Persisted. */
+  simulator?: import('@shared/simulator').SimulatorNodeConfig
   [key: string]: unknown
 }
 
@@ -412,6 +417,30 @@ export function createRunNode(
       cwd: config.projectDir,
       runConfig: normalizeRunConfig(config),
       ...(opts.autoStart ? { runAutoStart: true } : {})
+    }
+  }
+}
+
+/**
+ * A Simulator node: a live iOS simulator screen (see @shared/simulator, nodes/SimulatorNode). The
+ * device is chosen in the node; `config` pre-selects one (a run node opening its simulator).
+ */
+export function createSimulatorNode(
+  index: number,
+  config: SimulatorNodeConfig = {},
+  center?: { x: number; y: number }
+): CanvasNode {
+  const c = normalizeSimulatorConfig(config)
+  return {
+    id: nextId('sim'),
+    type: 'simulator',
+    ...placeNode('simulator', center, index, SIMULATOR_SIZE.width, SIMULATOR_SIZE.height),
+    data: {
+      title: c.name ?? 'Simulator',
+      color: RUN_NODE_COLOR,
+      group: null,
+      tags: [],
+      simulator: c
     }
   }
 }
@@ -2645,7 +2674,8 @@ export function nodeStatesToFlow(states: CanvasNodeState[]): CanvasNode[] {
         worktree: n.worktree,
         trigger: n.trigger,
         // Hostile-input seam (git-shared file → live data), like `icon` above.
-        runConfig: normalizeRunConfig(n.runConfig)
+        runConfig: normalizeRunConfig(n.runConfig),
+        simulator: n.kind === 'simulator' ? normalizeSimulatorConfig(n.simulator) : undefined
       }
     }
   })
@@ -2675,7 +2705,9 @@ export function flowToNodeStates(nodes: CanvasNode[], retainInitialCommand = tru
                       ? TRIGGER_SIZE
                       : kind === 'files'
                         ? FILES_SIZE
-                        : TERMINAL_SIZE
+                        : kind === 'simulator'
+                          ? SIMULATOR_SIZE
+                          : TERMINAL_SIZE
   return nodes
     .map((n) => {
       const kind: NodeKind = (n.type as NodeKind) ?? 'terminal'
@@ -2737,6 +2769,7 @@ export function flowToNodeStates(nodes: CanvasNode[], retainInitialCommand = tru
         trigger: n.data.trigger,
         // Re-validated on the way OUT too — the shared file is only as good as its last writer.
         runConfig: normalizeRunConfig(n.data.runConfig),
+        simulator: kind === 'simulator' ? normalizeSimulatorConfig(n.data.simulator) : undefined,
         premaxRect: n.data.premaxRect
       }
     })

@@ -1961,6 +1961,33 @@ session.
   the dropdown). Add menus: **New view ▸ New run configuration**. Local projects only (disabled
   with `RUN_SSH_HINT` in SSH projects; relay stub answers "managed on the host"); POSIX only
   (refused on Windows). Server Edition: real. Kanban card modal: not yet. Mobile: N/A.
+- **simulator** (`SimulatorNode.tsx`, `core/simulator/`, `@shared/simulator`) — a live iOS simulator
+  screen on the canvas: click = tap, drag = swipe, wheel = a swipe, typing goes to the device (HID
+  keyboard usages from `KeyboardEvent.code`; ⌘-chords stay with nodeterm), Home / Lock buttons, a
+  device picker with Boot, and a Cover/Inner screen choice on foldables. DeviceHub (Xcode 27's
+  replacement for Simulator.app) cannot be embedded — it exposes only a `devices://` URL scheme and
+  macOS has no cross-app window embedding — so the node draws the device itself through
+  `nt-simbridge`, a small Swift helper whose SOURCE ships in `simbridge-source.ts` and is compiled on
+  first use with `xcrun swiftc` into `<userData>/simulator-bridge/<hash>/` (hash = source + version +
+  Xcode build, so an Xcode update recompiles; MEASURED ~3 s). It uses Xcode's PRIVATE simulator
+  frameworks (CoreSimulator / SimulatorKit — what DeviceHub uses), resolved at RUNTIME (dlopen /
+  NSClassFromString / dlsym) so a moved symbol fails with a sentence, never a link-time crash; the
+  Indigo HID message layout follows facebook/idb (MIT). Rules a refactor must keep, all MEASURED on
+  Xcode 27: (1) frames are the display's IOSurface, encoded only when its seed changes (0 cost while
+  still; ~19–30 fps while moving; first frame ~0.4 s); (2) a device can have SEVERAL main-class
+  displays — a foldable ("iPhone Duo") has an inner and a cover screen and only one is lit — so the
+  helper shows the lit one and follows a fold (switches when the shown one is still and another just
+  changed), with a manual pin; (3) touches go to the SHOWN screen's own digitizer, `0x40000000 |
+  screenID` (`screenProperties.screenID`): the generic main-screen target 0x32 reached neither screen
+  on the foldable; (4) Home/Lock are HID Consumer usages (Menu 0x40 / Power 0x30) to 0x32 — a Face ID
+  device ignores the legacy home-button source — falling back to the legacy source (0x33) when
+  refused; (5) the display state objects are ROCK proxies: no key-value coding, message primitives
+  through typed `objc_msgSend`. Input from the renderer is re-validated (`normalizeSimulatorInput`)
+  before it reaches the helper. A run node with a simulator device shows a 📱 button that opens (or
+  focuses) the Simulator node for it. Booting a simulator opens DeviceHub (`open -b
+  com.apple.dt.Devices`) — Simulator.app is not supported. **macOS desktop only**: the add rows are
+  disabled with `SIMULATOR_UNAVAILABLE_HINT` elsewhere, and the bridge/relay stub refuses (the helper
+  must run on the Mac that has the simulators). Kanban: not a card. Mobile: N/A.
 - **dino** (`DinoNode.tsx`) — a small self-contained T-Rex-style runner on a canvas (no PTY);
   high score persists via `data.highScore`.
 - **trigger** (`TriggerNode.tsx`) — a canvas-owned schedule (cron / interval / once) that

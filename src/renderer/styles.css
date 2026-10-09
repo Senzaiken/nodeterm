@@ -17749,3 +17749,100 @@ body.focus-mode .dock:hover {
   border-radius: 3px;
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 60%, transparent);
 }
+
+/* ── Simulator node (nodes/SimulatorNode.tsx) ─────────────────────────────────────────────────
+   A live iOS simulator screen: header, a control row, then the screen, which keeps the phone's
+   proportions (object-fit: contain) inside whatever size the node is. */
+.sim-node {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, calc(0.35 * var(--shadow-k)));
+}
+.sim-node.selected {
+  border-color: var(--accent);
+}
+.sim-node__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  cursor: grab;
+  flex-shrink: 0;
+}
+.sim-node__title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+.sim-node__bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 4px 8px 6px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11.5px;
+  flex-shrink: 0;
+}
+.sim-node__device {
+  flex: 1;
+  min-width: 0;
+  max-width: none;
+}
+.sim-node__screen {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  /* theme-exempt: the letterbox around a device screen is black in every theme, like a video. */
+  background: #000;
+  outline: none;
+  cursor: pointer;
+  touch-action: none;
+}
+.sim-node__screen:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+.sim-node__frame {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  user-select: none;
+  pointer-events: none;
+}
+.sim-node__placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.7);
+}
+.sim-node__note {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 8px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+}

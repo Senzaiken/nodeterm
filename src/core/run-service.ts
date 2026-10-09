@@ -212,10 +212,12 @@ export async function bootSimulator(udid: unknown): Promise<boolean> {
     if (!/current state: Booted/i.test(String((e as { stderr?: string }).stderr ?? (e as Error).message))) return false
   }
   devicesCache = null
+  // Xcode 27 replaced Simulator.app with DeviceHub (com.apple.dt.Devices, inside Xcode.app); only
+  // DeviceHub is supported. Opened by bundle id so its location inside Xcode does not matter.
   try {
-    await run('/usr/bin/open', ['-a', 'Simulator'], { timeout: 15_000 })
+    await run('/usr/bin/open', ['-b', 'com.apple.dt.Devices'], { timeout: 15_000 })
   } catch {
-    /* booted either way; the window is a convenience */
+    /* booted either way — the device runs headless, and a Simulator node shows it on the canvas */
   }
   return true
 }

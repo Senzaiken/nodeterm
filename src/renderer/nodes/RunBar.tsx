@@ -12,6 +12,8 @@ import {
   type RunStatus
 } from '@shared/run-config'
 import { isShellCommand } from '@shared/agents/pane'
+import { SIMULATOR_UDID } from '@shared/run-config'
+import { simulatorAvailable } from '../lib/addMenuSpec'
 import { useSession } from '../session/session'
 import { useProjects } from '../state/projects'
 import { terminalNodeSize, type CanvasNode } from '../state/workspace'
@@ -627,6 +629,23 @@ export function RunBar({ nodeId, config, autoStart }: Props) {
         <span className="run-bar__spacer" />
 
         <span className={`run-bar__status run-bar__status--${statusKind}`}>{statusText}</span>
+        {showDevice && config.deviceId && SIMULATOR_UDID.test(config.deviceId) && simulatorAvailable() && (
+          <button
+            type="button"
+            className="run-bar__icon"
+            title="Show this simulator on the canvas"
+            aria-label="Show simulator"
+            onClick={() =>
+              window.dispatchEvent(
+                new CustomEvent('nodeterm:open-simulator', {
+                  detail: { sourceNodeId: nodeId, udid: config.deviceId, name: device?.name ?? config.deviceName }
+                })
+              )
+            }
+          >
+            📱
+          </button>
+        )}
         <button
           type="button"
           className={`run-bar__icon${showTerminal ? ' run-bar__icon--on' : ''}`}

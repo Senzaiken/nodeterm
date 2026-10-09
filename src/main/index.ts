@@ -352,6 +352,7 @@ import { refreshCodexIdentityCaps, registerCodexIdentityIpc } from '../core/code
 import { codexCliCaps, registerCodexCliIpc } from '../core/codex-cli'
 import { registerWallpaperIpc } from '../core/wallpaper'
 import { registerRunConfigIpc, stopAllRunWatches } from '../core/run-service'
+import { registerSimulatorIpc, stopAllSimulators } from '../core/simulator/simulator-service'
 import {
   bindCodexThreadIdentity,
   setCodexThreadIdentityAuthSecret,
@@ -1524,6 +1525,7 @@ app.whenReady().then(async () => {
   registerCodexCliIpc()
   registerWallpaperIpc(settingsStore)
   registerRunConfigIpc()
+  registerSimulatorIpc()
   // Warm the `claude --version` probe now (it spawns a login shell + node, ~sub-second) so the
   // renderer's first `claude.cliCaps()` — awaited on the launch path of a cold-restored agent
   // node — resolves from cache instead of racing the probe into a conservative "no auto".
@@ -3994,6 +3996,8 @@ app.whenReady().then(async () => {
     revokeAllBrowser(browserRevocation, { userStopped: false })
     // Reload-on-save watchers die with the app; the runs themselves live on in tmux.
     stopAllRunWatches()
+    // Simulator views' helpers exit with their stdin; end them explicitly at quit.
+    stopAllSimulators()
   })
   ipcMain.on(
     IPC.agentControlResult,
