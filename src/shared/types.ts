@@ -566,6 +566,8 @@ export interface CanvasNodeState {
    * `normalizeRunConfig` (@shared/run-config) on every load AND save.
    */
   runConfig?: import('./run-config').RunNodeConfig
+  /** Run nodes: a simulator shown inside the node. Read through `normalizeInlineSimulatorConfig`. */
+  runSimulator?: import('./simulator').InlineSimulatorConfig
   /** simulator-only: which iOS simulator the node shows. Read through `normalizeSimulatorConfig`. */
   simulator?: import('./simulator').SimulatorNodeConfig
   // sticky-only

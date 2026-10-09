@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  INLINE_SIM_HEIGHT,
+  normalizeInlineSimulatorConfig,
   touchEdge,
   TOUCH_EDGE_MARGIN,
   normalizeDeviceId,
@@ -254,5 +256,27 @@ describe('touchEdge', () => {
     expect(normalizeSimulatorInput({ t: 'down', x: 0.5, y: 1, edge: 3 })).toEqual({ t: 'down', x: 0.5, y: 1, edge: 3 })
     expect(normalizeSimulatorInput({ t: 'move', x: 0.5, y: 1, edge: 9 })).toEqual({ t: 'move', x: 0.5, y: 1 })
     expect(normalizeSimulatorInput({ t: 'up', x: 0.5, y: 1, edge: '3' })).toEqual({ t: 'up', x: 0.5, y: 1, edge: 3 })
+  })
+})
+
+describe('inline simulator config', () => {
+  it('keeps the device and clamps the panel height', () => {
+    expect(normalizeInlineSimulatorConfig({ udid: 'avd:Pixel_9', name: 'Pixel 9', height: 99999 })).toEqual({
+      udid: 'avd:Pixel_9',
+      name: 'Pixel 9',
+      height: INLINE_SIM_HEIGHT.max
+    })
+    expect(normalizeInlineSimulatorConfig({ height: 10 })).toEqual({ height: INLINE_SIM_HEIGHT.min })
+    expect(normalizeInlineSimulatorConfig(null)).toBeUndefined()
+  })
+
+  it('an open panel with no device is still open (an empty object), and never carries a dock link', () => {
+    expect(normalizeInlineSimulatorConfig({})).toEqual({})
+    expect(normalizeInlineSimulatorConfig({ dockTo: 'term-1' })).toEqual({})
+  })
+
+  it('a split-off node keeps a valid link back to its run node', () => {
+    expect(normalizeSimulatorConfig({ dockTo: 'term-abc' })).toEqual({ dockTo: 'term-abc' })
+    expect(normalizeSimulatorConfig({ dockTo: '../x y' })).toEqual({})
   })
 })

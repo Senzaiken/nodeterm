@@ -29,8 +29,9 @@ export interface SimulatorMenuHandlers {
   promptPrivacy(op: 'grant' | 'revoke'): void
   pickInstall(): void
   pickMedia(): void
-  actualSize(): void
-  fitToScreen(): void
+  /** Absent inside a run node, which the view does not size. */
+  actualSize?(): void
+  fitToScreen?(): void
 }
 
 export interface SimulatorMenuState {
@@ -42,6 +43,13 @@ const NOT_SUPPORTED = ' (Not Supported)'
 
 function notSupported(label: string, why: string): MenuItem {
   return { label: label + NOT_SUPPORTED, disabled: true, hint: why, onClick: () => undefined }
+}
+
+/** A View-menu sizing item: inside a run node there is no node of its own to size. */
+function sizeItem(label: string, fn: (() => void) | undefined): MenuItem {
+  return fn
+    ? { label, onClick: () => fn() }
+    : { label, disabled: true, hint: 'Pop the simulator out of the run node to size it.', onClick: () => undefined }
 }
 
 const check = (on: boolean | undefined, label: string) => (on ? `✓ ${label}` : label)
@@ -198,8 +206,8 @@ export function buildSimulatorMenu(h: SimulatorMenuHandlers, s: SimulatorMenuSta
       type: 'submenu',
       label: 'View',
       children: [
-        { label: 'Actual Size', onClick: () => h.actualSize() },
-        { label: 'Fit to Screen', onClick: () => h.fitToScreen() }
+        sizeItem('Actual Size', h.actualSize),
+        sizeItem('Fit to Screen', h.fitToScreen)
       ]
     },
     { type: 'separator' },
@@ -337,8 +345,8 @@ export function buildAndroidMenu(h: SimulatorMenuHandlers, s: Pick<SimulatorMenu
       type: 'submenu',
       label: 'View',
       children: [
-        { label: 'Actual Size', onClick: () => h.actualSize() },
-        { label: 'Fit to Screen', onClick: () => h.fitToScreen() }
+        sizeItem('Actual Size', h.actualSize),
+        sizeItem('Fit to Screen', h.fitToScreen)
       ]
     },
     { type: 'separator' },

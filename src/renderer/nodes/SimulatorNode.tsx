@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { NodeResizer, useReactFlow, type NodeProps } from '@xyflow/react'
+import { NodeResizer, useReactFlow, useStore, type NodeProps } from '@xyflow/react'
 import {
   afterTouch,
   INPUT_HELD_HINT,
@@ -50,10 +50,95 @@ const WHEEL_END_MS = 140
 /** A wheel notch moves the synthetic finger by this fraction of the screen per 100 px of delta. */
 const WHEEL_SCALE = 0.25
 
+/** A Simulator node: the view, in its own box with a title, a close button and resize handles. */
 export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
-  const { api } = useSession()
   const { updateNodeData, deleteElements, setNodes } = useReactFlow()
-  const config = (data.simulator as SimulatorNodeConfig | undefined) ?? {}
+  const config = useMemo(() => (data.simulator as SimulatorNodeConfig | undefined) ?? {}, [data.simulator])
+  const dockTo = config.dockTo
+  const canDock = useStore((st) => !!dockTo && st.nodeLookup.get(dockTo)?.data?.runConfig !== undefined)
+  const host = useMemo<SimulatorHost>(
+    () => ({
+      selected: !!selected,
+      color: data.color as string,
+      resize: (width, height) =>
+        setNodes((ns) =>
+          ns.map((n) => (n.id !== id || (n.width === width && n.height === height) ? n : { ...n, width, height, style: { ...n.style, width, height } }))
+        )
+    }),
+    [id, selected, data.color, setNodes]
+  )
+  const onConfig = useCallback(
+    (next: SimulatorNodeConfig, pickedName?: string) =>
+      updateNodeData(id, (n) => ({
+        simulator: { ...next, ...(dockTo ? { dockTo } : {}) },
+        ...(pickedName && n.data.titleAuto !== false ? { title: pickedName } : {})
+      })),
+    [id, dockTo, updateNodeData]
+  )
+  return (
+    <SimulatorView
+      streamId={id}
+      config={config}
+      onConfig={onConfig}
+      label={(data.title as string) || config.name || 'Simulator'}
+      className={`sim-node${selected ? ' selected' : ''}`}
+      host={host}
+      header={
+        <div className="sim-node__header" style={{ background: `${data.color}22` }}>
+          <span className="sim-node__title" title={data.title as string}>
+            {data.title as string}
+          </span>
+          {canDock && dockTo && (
+            <button
+              className="run-bar__icon nodrag"
+              title="Dock back into its run node"
+              aria-label="Dock into run node"
+              onClick={() => window.dispatchEvent(new CustomEvent('nodeterm:dock-simulator', { detail: { simulatorNodeId: id, runNodeId: dockTo } }))}
+            >
+              ⇲
+            </button>
+          )}
+          <button className="term-node__close nodrag" title="Close" onClick={() => deleteElements({ nodes: [{ id }] })}>
+            ×
+          </button>
+        </div>
+      }
+    />
+  )
+}
+
+/** What a standalone node gives the view: it can size the node to the screen, and draws handles. */
+export interface SimulatorHost {
+  selected: boolean
+  color: string
+  resize: (width: number, height: number) => void
+}
+
+export interface SimulatorViewProps {
+  /** Keys the frame stream (`simulator:frame:<id>`): the node id, or `<runNodeId>.sim` inline. */
+  streamId: string
+  config: SimulatorNodeConfig
+  /** A device pick (with its name) or a rotation, to persist. */
+  onConfig: (next: SimulatorNodeConfig, pickedName?: string) => void
+  /** Names captures. */
+  label: string
+  className: string
+  style?: React.CSSProperties
+  header?: React.ReactNode
+  /** Standalone node only: fit-to-screen, Actual Size and resize handles. */
+  host?: SimulatorHost
+  /** Buttons appended to the toolbar (inline: pop out). */
+  barExtras?: React.ReactNode
+}
+
+/**
+ * The simulator screen with its toolbar, ⋯ menu and input — everything but the box around it, so a
+ * Simulator node and a run node's inline panel show the same thing.
+ */
+export function SimulatorView({ streamId: id, config, onConfig, label, className, style, header, host, barExtras }: SimulatorViewProps) {
+  const { api } = useSession()
+  const configRef = useRef(config)
+  configRef.current = config
   const udid = config.udid
   const orientation: SimulatorOrientation = config.orientation ?? 'portrait'
   const plat: SimulatorPlatform = simulatorPlatformOf(udid) ?? 'ios'
@@ -228,7 +313,7 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
     (by: 'long' | 'width' | 'height' = 'long') => {
       const root = rootRef.current
       const screen = screenRef.current
-      if (!root || !screen || !frameSize || screen.offsetWidth <= 0 || screen.offsetHeight <= 0) return
+      if (!host || !root || !screen || !frameSize || screen.offsetWidth <= 0 || screen.offsetHeight <= 0) return
       const { width, height } = fitNodeToScreen({
         screenW: screen.offsetWidth,
         screenH: screen.offsetHeight,
@@ -239,15 +324,9 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
         minW: NODE_MIN_SIZES.simulator.width,
         minH: NODE_MIN_SIZES.simulator.height
       })
-      setNodes((ns) =>
-        ns.map((n) =>
-          n.id !== id || (n.width === width && n.height === height)
-            ? n
-            : { ...n, width, height, style: { ...n.style, width, height } }
-        )
-      )
+      host.resize(width, height)
     },
-    [frameSize, id, setNodes]
+    [frameSize, host]
   )
   /** The screen area's size when a hand resize began, to tell which side was dragged. */
   const resizeFrom = useRef<{ w: number; h: number } | null>(null)
@@ -313,10 +392,10 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
     (dir: 'left' | 'right') => {
       const next = rotateOrientation(orientationRef.current, dir)
       orientationRef.current = next
-      updateNodeData(id, (n) => ({ simulator: { ...(n.data.simulator as SimulatorNodeConfig | undefined), orientation: next } }))
+      onConfig({ ...configRef.current, orientation: next })
       void api.simulator.input(id, { t: 'orientation', value: ORIENTATION_PURPLE[next] })
     },
-    [api, id, updateNodeData]
+    [api, id, onConfig]
   )
 
   const ratioAt = useCallback(
@@ -446,10 +525,7 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
   // ── Header actions ───────────────────────────────────────────────────────────────────────────
   const pick = (value: string) => {
     const d = sim.find((x) => x.id === value)
-    updateNodeData(id, (n) => ({
-      simulator: { udid: value, name: d?.name },
-      ...(n.data.titleAuto !== false && d ? { title: d.name } : {})
-    }))
+    onConfig({ udid: value, name: d?.name }, d?.name)
   }
   const boot = async () => {
     if (!udid) return
@@ -494,7 +570,7 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
   )
 
   const activeScreenID = displays[activeDisplay]?.screenID ?? 0
-  const deviceName = (data.title as string) || config.name || 'Simulator'
+  const deviceName = label
 
   const screenshot = async (target: SimulatorCaptureTarget) => {
     if (!udid) return
@@ -526,12 +602,12 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
     const disp = displays[activeDisplay]
     const root = rootRef.current
     const screen = screenRef.current
-    if (!disp || !root || !screen) return
+    if (!host || !disp || !root || !screen) return
     const scale = disp.scale ?? (/ipad/i.test(device?.name ?? config.name ?? '') ? 2 : 3)
     const turned = ORIENTATION_DEGREES[orientationRef.current] % 180 !== 0
     const w = Math.round((turned ? disp.height : disp.width) / scale + (root.offsetWidth - screen.offsetWidth))
     const h = Math.round((turned ? disp.width : disp.height) / scale + (root.offsetHeight - screen.offsetHeight))
-    setNodes((ns) => ns.map((n) => (n.id !== id ? n : { ...n, width: w, height: h, style: { ...n.style, width: w, height: h } })))
+    host.resize(w, h)
   }
 
   const pickFile = async (kind: 'install' | 'media') => {
@@ -602,8 +678,8 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
         }),
       pickInstall: () => void pickFile('install'),
       pickMedia: () => void pickFile('media'),
-      actualSize,
-      fitToScreen: () => fitToScreen('long')
+      actualSize: host ? actualSize : undefined,
+      fitToScreen: host ? () => fitToScreen('long') : undefined
     }
   const menuItems =
     plat === 'android'
@@ -650,15 +726,8 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
 
   return (
     <>
-      <div ref={rootRef} className={`sim-node${selected ? ' selected' : ''}`}>
-        <div className="sim-node__header" style={{ background: `${data.color}22` }}>
-          <span className="sim-node__title" title={data.title as string}>
-            {data.title as string}
-          </span>
-          <button className="term-node__close nodrag" title="Close" onClick={() => deleteElements({ nodes: [{ id }] })}>
-            ×
-          </button>
-        </div>
+      <div ref={rootRef} className={className} style={style}>
+        {header}
         <div className="sim-node__bar nodrag nowheel">
           <select className="run-bar__select sim-node__device" value={udid ?? ''} onChange={(e) => pick(e.target.value)}>
             {!udid && <option value="">{devices ? 'Pick a simulator…' : 'Loading…'}</option>}
@@ -746,6 +815,7 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
             </button>
           )}
           {statusText && <span className="run-bar__status">{statusText}</span>}
+          {barExtras}
         </div>
         <div
           ref={screenRef}
@@ -826,11 +896,12 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
         )}
       </div>
       {menuAt && <ContextMenu x={menuAt.x} y={menuAt.y} items={menuItems} onClose={() => setMenuAt(null)} />}
+      {host && (
       <NodeResizer
         minWidth={NODE_MIN_SIZES.simulator.width}
         minHeight={NODE_MIN_SIZES.simulator.height}
-        isVisible={selected}
-        color={data.color as string}
+        isVisible={host.selected}
+        color={host.color}
         // A hand resize snaps to the screen's shape when it ends, following the side that was
         // dragged — widen it and the height follows; make it taller and the width follows.
         onResizeStart={() => {
@@ -846,6 +917,7 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
           })
         }
       />
+      )}
     </>
   )
 }

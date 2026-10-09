@@ -2013,9 +2013,17 @@ session.
   swipe up from the very bottom only scrolled the app; 1 top / 2 left / 3 bottom / 4 right name
   PHYSICAL panel edges (an iPad turned left went home with 2, turned right with 4; top inferred), so
   the node computes the edge after mapping the touch to the panel and it holds for the whole
-  contact. A swipe down from the top worked without it. The run node's 📱 opens a Simulator node on
-  every run node: the run's device preselected when it is an iOS UDID or an Android emulator's adb
-  serial (`SimulatorDevice.serial`), else empty for the user to pick.
+  contact. A swipe down from the top worked without it.
+  **Inside a run node.** The screen, toolbar, ⋯ menu and input are one component, `SimulatorView`;
+  `SimulatorNode` is a thin box around it (title, close, resize handles, fit-to-screen), and a run
+  node mounts the same view under its control rows when `data.runSimulator` is present (persisted,
+  `normalizeInlineSimulatorConfig`: device + panel height). 📱 on every run node toggles that panel
+  (the run's device preselected when it is an iOS UDID or an Android emulator's adb serial,
+  `SimulatorDevice.serial`; else empty to pick); ⇱ splits it into a Simulator node carrying
+  `dockTo: <runNodeId>`, whose ⇲ (or the run node's 📱) docks it back. The inline stream is keyed
+  `<runNodeId>.sim`. The panel sits INSIDE the run bar, so the compact (terminal hidden) fit sizes
+  the node around it; with the terminal shown, the node grows / shrinks by the panel. Inline there
+  is no node of its own to size, so Actual Size / Fit to Screen are greyed out there.
   **Android virtual devices** use the same node (`core/simulator/android-*.ts`). A device id is
   `avd:<name>` (the AVD name is stable; adb serials are not) in the same persisted `udid` field.
   The picker lists every AVD read from files (`<avdHome>/<name>.ini` → `config.ini`; no

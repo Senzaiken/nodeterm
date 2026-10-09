@@ -3958,6 +3958,28 @@ body,
   font-size: 11.5px;
   color: var(--text);
 }
+/* A simulator inside a run node (SimulatorView under the control rows): full width of the node, its
+   own height (the grip under it), the picture letterboxed inside. Positioned so the view's toasts,
+   prompts and dialogs sit over the panel, like over a Simulator node. */
+.run-sim {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  margin: 2px -8px 0;
+  border-top: 1px solid var(--border);
+  overflow: hidden;
+  flex: none;
+}
+.run-sim__grip {
+  height: 7px;
+  margin: 0 -8px -5px;
+  cursor: ns-resize;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+}
+.run-sim__grip:hover {
+  background: color-mix(in srgb, var(--accent) 25%, var(--panel));
+}
 /* Terminal hidden (the default): the node is just the control rows. Same `display: none` path a
    collapsed node takes, so xterm and the tmux client stay alive underneath. */
 .term-node:has(.run-bar--compact) .term-node__body {

@@ -13,10 +13,12 @@ import {
 } from '@shared/run-config'
 import { isShellCommand } from '@shared/agents/pane'
 import { SIMULATOR_UDID } from '@shared/run-config'
+import { INLINE_SIM_HEIGHT, type InlineSimulatorConfig, type SimulatorNodeConfig } from '@shared/simulator'
+import { SimulatorView } from './SimulatorNode'
 import { simulatorAvailable } from '../lib/addMenuSpec'
 import { useSession } from '../session/session'
 import { useProjects } from '../state/projects'
-import { terminalNodeSize, type CanvasNode } from '../state/workspace'
+import { createSimulatorNode, terminalNodeSize, type CanvasNode } from '../state/workspace'
 import { IconPlay, IconReload } from '../components/icons'
 
 /**
@@ -50,6 +52,8 @@ interface Props {
   config: RunNodeConfig
   /** A compound's sibling: start the run once on mount. */
   autoStart: boolean
+  /** The simulator shown inside this node, when it is (`data.runSimulator`). */
+  simulator?: InlineSimulatorConfig
 }
 
 /** Node id → title → device, for every run node on the live canvas, as one primitive. */
@@ -85,9 +89,9 @@ function parseSig(sig: string): Array<{ id: string; title: string; runConfig: { 
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-export function RunBar({ nodeId, config, autoStart }: Props) {
+export function RunBar({ nodeId, config, autoStart, simulator }: Props) {
   const { api } = useSession()
-  const { updateNodeData, setNodes } = useReactFlow()
+  const { updateNodeData, setNodes, getZoom } = useReactFlow()
   const [listing, setListing] = useState<RunEntriesResult | null>(null)
   const [devices, setDevices] = useState<RunDevice[] | null>(null)
   const [devicesError, setDevicesError] = useState<string | null>(null)
@@ -416,24 +420,141 @@ export function RunBar({ nodeId, config, autoStart }: Props) {
     return () => ro.disconnect()
   }, [showTerminal, fitCompact])
 
-  // 📱: a Simulator node beside this one. The run's device is preselected when it is a simulator —
-  // an iOS UDID, or an Android emulator's adb serial (what Flutter names it), mapped to its virtual
-  // device — and otherwise the node opens empty for the user to pick any.
-  const openSimulator = async () => {
-    const id = showDevice ? config.deviceId : undefined
-    let udid: string | undefined
-    let name: string | undefined
-    if (id && SIMULATOR_UDID.test(id)) {
-      udid = id
-      name = device?.name ?? config.deviceName
-    } else if (id && /^emulator-\d+$/.test(id)) {
-      const avd = (await api.simulator.devices().catch(() => ({ devices: [] }))).devices.find((d) => d.serial === id)
-      if (avd) {
-        udid = avd.id
-        name = avd.name
-      }
+  // ── 📱 The simulator, inside this node ─────────────────────────────────────────────────────
+  //
+  // The panel sits under the control rows, inside the bar, so the compact fit above sizes the node
+  // around it. 📱 opens it (the run's device preselected when it is a simulator — an iOS UDID, or
+  // an Android emulator's adb serial, which is what Flutter names it — else empty to pick any) and
+  // closes it again; when the simulator was popped out into its own node, 📱 docks it back in.
+  // With the terminal shown, the node's height is not fitted, so it grows / shrinks by the panel.
+
+  const simHeight = simulator?.height ?? INLINE_SIM_HEIGHT.default
+  const [dragHeight, setDragHeight] = useState<number | null>(null)
+  const panelHeight = dragHeight ?? simHeight
+  const poppedOut = useStore((st) => {
+    for (const n of st.nodeLookup.values()) {
+      if (n.type === 'simulator' && (n.data.simulator as SimulatorNodeConfig | undefined)?.dockTo === nodeId) return n.id
     }
-    window.dispatchEvent(new CustomEvent('nodeterm:open-simulator', { detail: { sourceNodeId: nodeId, udid, name } }))
+    return null
+  })
+
+  /** Set or clear the inline simulator, growing the node by the panel when the terminal shows. */
+  const setInline = useCallback(
+    (next: InlineSimulatorConfig | undefined, extra?: (ns: CanvasNode[]) => CanvasNode[]) => {
+      setNodes((all) => {
+        const ns = (extra ? extra(all as CanvasNode[]) : all) as CanvasNode[]
+        return ns.map((n) => {
+          if (n.id !== nodeId) return n
+          const was = n.data.runSimulator as InlineSimulatorConfig | undefined
+          const data = { ...n.data, runSimulator: next }
+          const showing = !!(n.data.runConfig as RunNodeConfig | undefined)?.showTerminal
+          if (!showing || !!was === !!next) return { ...n, data }
+          const delta = (next ? next.height ?? INLINE_SIM_HEIGHT.default : -(was?.height ?? INLINE_SIM_HEIGHT.default))
+          const height = Math.max(terminalNodeSize().height, ((n.height as number | undefined) ?? 0) + delta)
+          return { ...n, height, style: { ...n.style, height }, data }
+        })
+      })
+    },
+    [nodeId, setNodes]
+  )
+
+  const dockBack = useCallback(
+    (simNodeId: string) => {
+      setNodes((all) => {
+        const sim = (all as CanvasNode[]).find((n) => n.id === simNodeId)
+        const cfg = (sim?.data.simulator as SimulatorNodeConfig | undefined) ?? {}
+        const { dockTo: _d, ...device } = cfg
+        void _d
+        return (all as CanvasNode[])
+          .filter((n) => n.id !== simNodeId)
+          .map((n) => {
+            if (n.id !== nodeId) return n
+            const runSimulator: InlineSimulatorConfig = { ...device, height: (n.data.runSimulator as InlineSimulatorConfig | undefined)?.height }
+            const showing = !!(n.data.runConfig as RunNodeConfig | undefined)?.showTerminal
+            if (!showing) return { ...n, data: { ...n.data, runSimulator } }
+            const height = ((n.height as number | undefined) ?? 0) + (runSimulator.height ?? INLINE_SIM_HEIGHT.default)
+            return { ...n, height, style: { ...n.style, height }, data: { ...n.data, runSimulator } }
+          })
+      })
+    },
+    [nodeId, setNodes]
+  )
+
+  // The popped-out node's ⇲ asks for this.
+  useEffect(() => {
+    const onDock = (e: Event) => {
+      const d = (e as CustomEvent<{ simulatorNodeId?: string; runNodeId?: string }>).detail
+      if (d?.runNodeId === nodeId && d.simulatorNodeId) dockBack(d.simulatorNodeId)
+    }
+    window.addEventListener('nodeterm:dock-simulator', onDock)
+    return () => window.removeEventListener('nodeterm:dock-simulator', onDock)
+  }, [nodeId, dockBack])
+
+  const toggleSimulator = async () => {
+    if (simulator) return setInline(undefined)
+    if (poppedOut) return dockBack(poppedOut)
+    const id = showDevice ? config.deviceId : undefined
+    let next: InlineSimulatorConfig = {}
+    if (id && SIMULATOR_UDID.test(id)) next = { udid: id.toUpperCase(), name: device?.name ?? config.deviceName }
+    else if (id && /^emulator-\d+$/.test(id)) {
+      const avd = (await api.simulator.devices().catch(() => ({ devices: [] }))).devices.find((d) => d.serial === id)
+      if (avd) next = { udid: avd.id, name: avd.name }
+    }
+    setInline(next)
+  }
+
+  /** ⇱: the panel becomes its own Simulator node beside this one, which can dock back. */
+  const popOut = () => {
+    if (!simulator) return
+    const { height: _h, ...device } = simulator
+    void _h
+    setInline(undefined, (ns) => {
+      const src = ns.find((n) => n.id === nodeId)
+      if (!src) return ns
+      const node = createSimulatorNode(ns.length, { ...device, dockTo: nodeId })
+      const w = src.measured?.width ?? (src.width as number | undefined) ?? 640
+      node.position = { x: src.position.x + w + 40, y: src.position.y }
+      return [...ns, src.parentId ? { ...node, parentId: src.parentId, extent: 'parent' as const } : node]
+    })
+  }
+
+  const onSimConfig = useCallback(
+    (next: SimulatorNodeConfig) => {
+      updateNodeData(nodeId, (n) => {
+        const was = n.data.runSimulator as InlineSimulatorConfig | undefined
+        if (!was) return {}
+        return { runSimulator: { ...next, dockTo: undefined, height: was.height } }
+      })
+    },
+    [nodeId, updateNodeData]
+  )
+
+  /** The grip under the panel: drag to set its height (canvas pixels, so the zoom is divided out). */
+  const onGripDown = (e: React.PointerEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    const startY = e.clientY
+    const from = simHeight
+    const zoom = getZoom() || 1
+    const clamp = (h: number) => Math.round(Math.min(INLINE_SIM_HEIGHT.max, Math.max(INLINE_SIM_HEIGHT.min, h)))
+    const move = (ev: PointerEvent) => setDragHeight(clamp(from + (ev.clientY - startY) / zoom))
+    const up = (ev: PointerEvent) => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      const h = clamp(from + (ev.clientY - startY) / zoom)
+      setDragHeight(null)
+      setNodes((ns) =>
+        ns.map((n) => {
+          if (n.id !== nodeId || !n.data.runSimulator) return n
+          const data = { ...n.data, runSimulator: { ...(n.data.runSimulator as InlineSimulatorConfig), height: h } }
+          if (!(n.data.runConfig as RunNodeConfig | undefined)?.showTerminal) return { ...n, data }
+          const height = ((n.height as number | undefined) ?? 0) + (h - from)
+          return { ...n, height, style: { ...n.style, height }, data }
+        })
+      )
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
   }
 
   const toggleTerminal = useCallback(() => {
@@ -652,10 +773,17 @@ export function RunBar({ nodeId, config, autoStart }: Props) {
         {simulatorAvailable() && (
           <button
             type="button"
-            className="run-bar__icon"
-            title="Show a simulator on the canvas — this run's device when it is one, or pick any"
-            aria-label="Show simulator"
-            onClick={() => void openSimulator()}
+            className={`run-bar__icon${simulator || poppedOut ? ' run-bar__icon--on' : ''}`}
+            title={
+              simulator
+                ? 'Hide the simulator'
+                : poppedOut
+                  ? 'Dock the simulator back into this node'
+                  : "Show a simulator here — this run's device when it is one, or pick any"
+            }
+            aria-label={simulator ? 'Hide simulator' : 'Show simulator'}
+            aria-pressed={!!simulator}
+            onClick={() => void toggleSimulator()}
           >
             📱
           </button>
@@ -691,6 +819,25 @@ export function RunBar({ nodeId, config, autoStart }: Props) {
 
       {(note || blocker) && (
         <div className={`run-bar__note run-bar__note--${note?.kind ?? 'error'}`}>{note?.text ?? blocker}</div>
+      )}
+
+      {simulator && (
+        <>
+          <SimulatorView
+            streamId={`${nodeId}.sim`}
+            config={simulator}
+            onConfig={onSimConfig}
+            label={simulator.name ?? 'Simulator'}
+            className="run-sim"
+            style={{ height: panelHeight }}
+            barExtras={
+              <button className="run-bar__icon" title="Pop out into its own node" aria-label="Pop out" onClick={popOut}>
+                ⇱
+              </button>
+            }
+          />
+          <div className="run-sim__grip" title="Drag to resize the simulator" onPointerDown={onGripDown} />
+        </>
       )}
     </div>
   )

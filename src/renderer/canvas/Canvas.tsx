@@ -108,7 +108,7 @@ import BrowserNode from '../nodes/BrowserNode'
 import { FilesNode } from '../nodes/FilesNode'
 import { SimulatorNode } from '../nodes/SimulatorNode'
 import type { RunNodeConfig } from '@shared/run-config'
-import { normalizeDeviceId, type SimulatorNodeConfig } from '@shared/simulator'
+import type { SimulatorNodeConfig } from '@shared/simulator'
 import { normalizeAddress } from '../nodes/browserUrl'
 import VideoNode from '../nodes/VideoNode'
 import WebNode from '../nodes/WebNode'
@@ -6183,32 +6183,6 @@ export function Canvas() {
     },
     [setNodes, markDirty, emptyNodePos, parentInto]
   )
-
-  // A run node's "show simulator": a Simulator node beside it, in its frame — for the run's device
-  // when it is a simulator (and when one already shows that device on this canvas, that one is
-  // brought into view instead), else an empty one where the user picks any device.
-  useEffect(() => {
-    const onOpenSimulator = (e: Event): void => {
-      const d = (e as CustomEvent<{ sourceNodeId?: string; udid?: string; name?: string }>).detail
-      const udid = normalizeDeviceId(d?.udid) ?? undefined
-      if (udid) {
-        const existing = nodesRef.current.find((n) => n.type === 'simulator' && (n.data.simulator as SimulatorNodeConfig | undefined)?.udid === udid)
-        if (existing) {
-          focusNodeRef.current?.(existing.id)
-          return
-        }
-      }
-      const src = nodesRef.current.find((n) => n.id === d?.sourceNodeId)
-      if (!src || !simulatorAvailable()) return
-      const w = src.measured?.width ?? (src.width as number) ?? 640
-      const node = createSimulatorNode(nodesRef.current.length, udid ? { udid, name: d.name } : {})
-      node.position = { x: src.position.x + w + 40, y: src.position.y }
-      setNodes((ns) => [...ns, src.parentId ? { ...node, parentId: src.parentId, extent: 'parent' as const } : node])
-      markDirty()
-    }
-    window.addEventListener('nodeterm:open-simulator', onOpenSimulator)
-    return () => window.removeEventListener('nodeterm:open-simulator', onOpenSimulator)
-  }, [setNodes, markDirty])
 
   const addSticky = useCallback(
     (center?: { x: number; y: number }, groupId?: string) => {

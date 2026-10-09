@@ -68,6 +68,28 @@ export interface SimulatorNodeConfig {
   name?: string
   /** How the device is held. Absent = portrait. */
   orientation?: SimulatorOrientation
+  /** A Simulator node split off a run node: that run node's id, so it can be docked back in. */
+  dockTo?: string
+}
+
+/**
+ * A simulator shown INSIDE a run node (`data.runSimulator`): present = the panel is open. The same
+ * device settings as a Simulator node, plus the panel's height — the run node's width is the
+ * user's, so the screen is fitted inside a panel of this height.
+ */
+export interface InlineSimulatorConfig extends SimulatorNodeConfig {
+  height?: number
+}
+
+export const INLINE_SIM_HEIGHT = { min: 240, max: 1600, default: 560 } as const
+
+export function normalizeInlineSimulatorConfig(raw: unknown): InlineSimulatorConfig | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const out: InlineSimulatorConfig = normalizeSimulatorConfig(raw)
+  delete out.dockTo
+  const h = Number((raw as Record<string, unknown>).height)
+  if (Number.isFinite(h)) out.height = Math.round(Math.min(INLINE_SIM_HEIGHT.max, Math.max(INLINE_SIM_HEIGHT.min, h)))
+  return out
 }
 
 // ── Orientation ────────────────────────────────────────────────────────────────────────────────
@@ -138,6 +160,7 @@ export function normalizeSimulatorConfig(raw: unknown): SimulatorNodeConfig {
     if (typeof r.name === 'string' && r.name.trim() && r.name.length <= 200 && !CONTROL.test(r.name)) out.name = r.name.trim()
   }
   if (isSimulatorOrientation(r.orientation) && r.orientation !== 'portrait') out.orientation = r.orientation
+  if (typeof r.dockTo === 'string' && SIMULATOR_NODE_ID.test(r.dockTo)) out.dockTo = r.dockTo
   return out
 }
 

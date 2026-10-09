@@ -39,7 +39,7 @@ import { openerByTarget, recordedOpenerOf } from '../lib/teamProgress'
 import { normalizePendingLaunch } from '@shared/pending-launch-shape'
 import { normalizeTerminalFontSize } from '../terminal/terminal-font-zoom'
 import { normalizeRunConfig, runNodeTitle, type RunNodeConfig } from '@shared/run-config'
-import { normalizeSimulatorConfig, type SimulatorNodeConfig } from '@shared/simulator'
+import { normalizeInlineSimulatorConfig, normalizeSimulatorConfig, type SimulatorNodeConfig } from '@shared/simulator'
 import { useSettings } from './settings'
 
 // Re-exported so Canvas (and anything else in the renderer) keeps importing it from here, while the
@@ -243,6 +243,8 @@ export interface NodeData {
   trigger?: import('@shared/trigger').TriggerSpec
   /** Run nodes only: which launch.json configuration runs, where. See @shared/run-config. Persisted. */
   runConfig?: import('@shared/run-config').RunNodeConfig
+  /** Run nodes only: a simulator shown inside the node (present = shown). See @shared/simulator. */
+  runSimulator?: import('@shared/simulator').InlineSimulatorConfig
   /** Run nodes only, transient: start the run on mount (a compound's sibling). Never persisted. */
   runAutoStart?: boolean
   /** simulator-only: which iOS simulator the node shows. See @shared/simulator. Persisted. */
@@ -2675,6 +2677,7 @@ export function nodeStatesToFlow(states: CanvasNodeState[]): CanvasNode[] {
         trigger: n.trigger,
         // Hostile-input seam (git-shared file → live data), like `icon` above.
         runConfig: normalizeRunConfig(n.runConfig),
+        runSimulator: n.runConfig ? normalizeInlineSimulatorConfig(n.runSimulator) : undefined,
         simulator: n.kind === 'simulator' ? normalizeSimulatorConfig(n.simulator) : undefined
       }
     }
@@ -2769,6 +2772,7 @@ export function flowToNodeStates(nodes: CanvasNode[], retainInitialCommand = tru
         trigger: n.data.trigger,
         // Re-validated on the way OUT too — the shared file is only as good as its last writer.
         runConfig: normalizeRunConfig(n.data.runConfig),
+        runSimulator: n.data.runConfig ? normalizeInlineSimulatorConfig(n.data.runSimulator) : undefined,
         simulator: kind === 'simulator' ? normalizeSimulatorConfig(n.data.simulator) : undefined,
         premaxRect: n.data.premaxRect
       }
