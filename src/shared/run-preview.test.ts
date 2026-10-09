@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { deviceForBrowserPanel, isSimulatorDeviceId, localUrlFromOutput, normalizeRunBrowserConfig, previewKindFor } from './run-preview'
+import { isSimulatorDeviceId, isWebDeviceId, localUrlFromOutput, normalizeRunBrowserConfig, previewKindFor } from './run-preview'
 
-const base = { picksDevice: false, browserConfig: false, pinsDevice: false }
+const base = { picksDevice: false, browserConfig: false }
 
 describe('previewKindFor', () => {
   it('a phone device gets the simulator, a browser device or configuration the browser', () => {
@@ -12,9 +12,15 @@ describe('previewKindFor', () => {
     expect(previewKindFor({ ...base, browserConfig: true })).toBe('browser')
   })
 
-  it('a dev server (no device) gets the browser; a run that pins its own device the simulator', () => {
+  it('a dev server (no device) gets the browser', () => {
     expect(previewKindFor(base)).toBe('browser')
-    expect(previewKindFor({ ...base, pinsDevice: true })).toBe('simulator')
+  })
+
+  it("follows the device a configuration names itself — the case that showed 📱 for a Chrome run", () => {
+    expect(previewKindFor({ ...base, picksDevice: false, pinnedDeviceId: 'chrome' })).toBe('browser')
+    expect(previewKindFor({ ...base, pinnedDeviceId: 'web-server' })).toBe('browser')
+    expect(previewKindFor({ ...base, pinnedDeviceId: 'emulator-5554' })).toBe('simulator')
+    expect(previewKindFor({ ...base, pinnedDeviceId: 'macos' })).toBe('simulator')
   })
 
   it('a device picker with nothing picked yet offers the simulator', () => {
@@ -50,13 +56,10 @@ describe('localUrlFromOutput', () => {
   })
 })
 
-describe('the Flutter Chrome swap', () => {
-  it('runs Flutter on its web server while the browser panel is open', () => {
-    expect(deviceForBrowserPanel('chrome', true)).toBe('web-server')
-    expect(deviceForBrowserPanel('edge', true)).toBe('web-server')
-    expect(deviceForBrowserPanel('chrome', false)).toBe('chrome')
-    expect(deviceForBrowserPanel('web-server', true)).toBe('web-server')
-    expect(deviceForBrowserPanel(undefined, true)).toBeUndefined()
+describe('isWebDeviceId', () => {
+  it('names Flutter\'s browser devices', () => {
+    expect(['chrome', 'edge', 'web-server'].every(isWebDeviceId)).toBe(true)
+    expect(isWebDeviceId('macos')).toBe(false)
   })
 })
 

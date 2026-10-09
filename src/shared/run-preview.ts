@@ -40,25 +40,17 @@ export interface PreviewTarget {
   /** The picked device's id and kind, when there is one. */
   deviceId?: string
   deviceKind?: string
+  /** The device the configuration names itself (`-d chrome`, `"deviceId": "chrome"`). */
+  pinnedDeviceId?: string
   /** A `chrome` / `msedge` configuration: it opens a page rather than running a process. */
   browserConfig: boolean
-  /** The configuration takes a device but pins its own (`-d` in its args). */
-  pinsDevice: boolean
 }
 
 const IOS_UDID = /^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$/
 
-/** Which panel 📱 / 🌐 opens for a run. */
-export function previewKindFor(t: PreviewTarget): PreviewKind {
-  if (t.browserConfig) return 'browser'
-  if (t.picksDevice) {
-    if (t.deviceKind === 'web' || t.deviceId === 'chrome' || t.deviceId === 'edge' || t.deviceId === 'web-server') return 'browser'
-    return 'simulator'
-  }
-  // A configuration that pins its own device is a phone run whose device we cannot see; anything
-  // else that runs a process is most likely a server whose page is the thing to look at.
-  if (t.pinsDevice) return 'simulator'
-  return 'browser'
+/** Flutter's browser devices. */
+export function isWebDeviceId(id: string | undefined): boolean {
+  return id === 'chrome' || id === 'edge' || id === 'web-server'
 }
 
 /** Whether a device id names a simulator the simulator panel can show by itself. */
@@ -66,14 +58,13 @@ export function isSimulatorDeviceId(id: string | undefined): boolean {
   return !!id && (IOS_UDID.test(id) || /^emulator-\d+$/.test(id))
 }
 
-/**
- * Flutter's browser devices open their OWN browser window. With the browser panel open, the run uses
- * `web-server` instead — Flutter serves the same app to any browser that opens its URL (this panel
- * included) and prints that URL. Returns the device to run on, or the same one when no swap is due.
- */
-export function deviceForBrowserPanel(deviceId: string | undefined, panelOpen: boolean): string | undefined {
-  if (!panelOpen) return deviceId
-  return deviceId === 'chrome' || deviceId === 'edge' ? 'web-server' : deviceId
+/** Which panel the run calls for (the button offers both; this one is marked and opened on Run). */
+export function previewKindFor(t: PreviewTarget): PreviewKind {
+  if (t.browserConfig) return 'browser'
+  if (t.pinnedDeviceId) return isWebDeviceId(t.pinnedDeviceId) ? 'browser' : 'simulator'
+  if (t.picksDevice) return t.deviceKind === 'web' || isWebDeviceId(t.deviceId) ? 'browser' : 'simulator'
+  // A run with no device at all is most likely a server, whose page is the thing to look at.
+  return 'browser'
 }
 
 const LOCAL_URL = /\bhttps?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1?\])(?::\d{2,5})?(?:\/[^\s'"<>`)\]]*)?/gi

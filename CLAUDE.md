@@ -2027,18 +2027,24 @@ session.
   `INLINE_SIM_HEIGHT`, closing hands that back. Inline there is no node of its own to snap to the
   screen's shape, so Actual Size / Fit to Screen are greyed out there (pop out for those).
   **The browser panel** (`@shared/run-preview`) is the same idea for a run whose result is a page:
-  the button shows 🌐 instead of 📱 when `previewKindFor` says so — a `chrome`/`msedge` launch
-  configuration, a Flutter web device (`chrome`, `edge`, `web-server`), or a run with no device
-  (a dev server). `data.runBrowser` (persisted, http(s) only) holds the page: a browser
+  the button offers both (a menu: simulator / browser, the run's own kind marked "this run" and
+  shown on the button as 📱 or 🌐 per `previewKindFor` — a `chrome`/`msedge` launch configuration,
+  a Flutter web device, picked OR named by the configuration itself (`-d chrome` in its args — a
+  rule that read only the picker showed 📱 for exactly those runs), or a run with no device, i.e.
+  a dev server). `data.runBrowser` (persisted, http(s) only) holds the page: a browser
   configuration's own `url` (its Run/Open now lands in this panel, or in a panel popped out of it,
   instead of a separate browser node), else the URL picked out of the run's own output by
   `localUrlFromOutput` (the newest local http(s) URL on a "served at / Local: / listening on" line;
   DevTools / VM-service lines skipped; `0.0.0.0` opened as `localhost`), polled with `pty.capture`
   only while the panel is open, the run is up and no page is known. A picked-out URL is marked
   `auto` and re-read on the next run (the port may change); one the person navigated to is kept.
-  While the panel is open, a Flutter `chrome`/`edge` device runs as `web-server`
-  (`deviceForBrowserPanel`): Chrome would open a window of Flutter's own, the web server serves the
-  same app to any browser, and prints its URL. ⇱ pops it into a browser node with `dockTo`; its ⇲
+  A Flutter `chrome`/`edge` run is EMBEDDED by default: `planLaunch` swaps the device for
+  `web-server` (`webServerDevice`, `PlanContext.webServer`) wherever it is named — the pick, `-d` /
+  `--device-id` / `-d=` in args or toolArgs, or Dart-Code's `deviceId` field (which used to be
+  dropped, not passed as `-d`) — because Chrome would open a window of Flutter's own while the web
+  server serves the same app to any browser and prints its URL; Run then opens the browser panel
+  by itself. `runConfig.embedBrowser: false` (the menu's "Run Flutter web inside this node")
+  restores Flutter's own Chrome window. ⇱ pops it into a browser node with `dockTo`; its ⇲
   (`nodeterm:dock-preview`, shared with the Simulator node) or 🌐 docks it back. A run node holds
   one panel at a time. The inline page is not part of the browser-node keep-alive pool, so a
   project switch reloads it.

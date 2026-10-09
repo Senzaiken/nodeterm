@@ -341,6 +341,7 @@ export async function startRun(nodeId: unknown, rawConfig: unknown): Promise<Run
     pythonPath,
     deviceId: config.deviceId,
     extraArgs: config.extraArgs,
+    webServer: config.embedBrowser !== false,
     flutterPidFile: flutterPidFile(nodeId),
     tasks
   })
