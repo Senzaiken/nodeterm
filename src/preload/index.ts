@@ -564,6 +564,12 @@ const api: NodeTerminalApi = {
     stop: (nodeId) => ipcRenderer.invoke(IPC.simulatorStop, nodeId),
     input: (nodeId, cmd) => ipcRenderer.invoke(IPC.simulatorInput, nodeId, cmd),
     shutdown: (udid) => ipcRenderer.invoke(IPC.simulatorShutdown, udid),
+    action: (udid, action) => ipcRenderer.invoke(IPC.simulatorAction, udid, action),
+    state: (udid) => ipcRenderer.invoke(IPC.simulatorState, udid),
+    screenshot: (udid, screenID, target, name) => ipcRenderer.invoke(IPC.simulatorScreenshot, udid, screenID, target, name),
+    startRecording: (udid, screenID, name) => ipcRenderer.invoke(IPC.simulatorRecordStart, udid, screenID, name),
+    stopRecording: (udid) => ipcRenderer.invoke(IPC.simulatorRecordStop, udid),
+    isRecording: (udid) => ipcRenderer.invoke(IPC.simulatorRecording, udid),
     onFrame: (nodeId, listener) => {
       const channel = IPC.simulatorFrame(nodeId)
       const handler = (_e: unknown, frame: import('../shared/simulator').SimulatorFrame) => listener(frame)

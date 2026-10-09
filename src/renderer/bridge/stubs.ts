@@ -348,6 +348,12 @@ export function buildStubApi(): Omit<
       stop: () => Promise.resolve(),
       input: () => Promise.resolve(false),
       shutdown: () => Promise.resolve(false),
+      action: () => Promise.resolve({ ok: false as const, error: 'Simulator views are only available in the macOS desktop app.' }),
+      state: () => Promise.resolve({}),
+      screenshot: () => Promise.resolve({ ok: false as const, error: 'Simulator views are only available in the macOS desktop app.' }),
+      startRecording: () => Promise.resolve({ ok: false as const, error: 'Simulator views are only available in the macOS desktop app.' }),
+      stopRecording: () => Promise.resolve({ ok: false as const, error: 'Not recording.' }),
+      isRecording: () => Promise.resolve(false),
       onFrame: () => () => {},
       onStatus: () => () => {}
     },

@@ -46,8 +46,8 @@ describe('parseBridgeStatus', () => {
       active: 1,
       pinned: false,
       displays: [
-        { index: 0, width: 2007, height: 2853, name: 'LCD-1' },
-        { index: 1, width: 1398, height: 2034, name: 'LCD' }
+        { index: 0, width: 2007, height: 2853, name: 'LCD-1', screenID: 3 },
+        { index: 1, width: 1398, height: 2034, name: 'LCD', screenID: 0 }
       ]
     })
     expect(parseBridgeStatus('{"error":"not-booted","message":"the simulator is Shutdown"}')).toEqual({

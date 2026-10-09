@@ -212,13 +212,10 @@ export async function bootSimulator(udid: unknown): Promise<boolean> {
     if (!/current state: Booted/i.test(String((e as { stderr?: string }).stderr ?? (e as Error).message))) return false
   }
   devicesCache = null
-  // Xcode 27 replaced Simulator.app with DeviceHub (com.apple.dt.Devices, inside Xcode.app); only
-  // DeviceHub is supported. Opened by bundle id so its location inside Xcode does not matter.
-  try {
-    await run('/usr/bin/open', ['-b', 'com.apple.dt.Devices'], { timeout: 15_000 })
-  } catch {
-    /* booted either way — the device runs headless, and a Simulator node shows it on the canvas */
-  }
+  // DeviceHub is deliberately NOT opened: the device runs headless and a Simulator node shows it on
+  // the canvas. MEASURED (Xcode 27): a device takes input from its FIRST HID client only, and
+  // DeviceHub showing the device is one — so opening it here took touch input away from the node.
+  // "Open in DeviceHub" in the Simulator node's menu is the explicit way there.
   return true
 }
 

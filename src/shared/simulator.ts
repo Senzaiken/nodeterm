@@ -90,8 +90,8 @@ export const SIMULATOR_NODE_ID = /^[A-Za-z0-9._-]{1,128}$/
 
 // ── Input ──────────────────────────────────────────────────────────────────────────────────────
 
-export type SimulatorButton = 'home' | 'lock' | 'siri' | 'volup' | 'voldown'
-const BUTTONS: readonly SimulatorButton[] = ['home', 'lock', 'siri', 'volup', 'voldown']
+export type SimulatorButton = 'home' | 'lock' | 'side' | 'siri' | 'volup' | 'voldown' | 'playpause'
+const BUTTONS: readonly SimulatorButton[] = ['home', 'lock', 'side', 'siri', 'volup', 'voldown', 'playpause']
 
 export type SimulatorInput =
   | { t: 'down' | 'move' | 'up'; x: number; y: number }
@@ -194,6 +194,8 @@ export interface SimulatorDisplayInfo {
   height: number
   /** The device's own name for it: "LCD" (cover / only screen), "LCD-1" (a foldable's inner). */
   name: string
+  /** simctl's screen id for it (`simctl io --display=<id>`), 0 when unknown. */
+  screenID: number
 }
 
 export type SimulatorStatusEvent =
@@ -218,6 +220,15 @@ export interface SimulatorApi {
   /** Touch / key / button / display — validated again on the host. */
   input(nodeId: string, cmd: SimulatorInput): Promise<boolean>
   shutdown(udid: string): Promise<boolean>
+  /** The ⋯ menu's device actions (simctl / simulator notifications). */
+  action(udid: string, action: SimulatorAction): Promise<SimulatorActionResult>
+  /** Settings the menu marks with ✓, and the location scenarios. */
+  state(udid: string): Promise<SimulatorDeviceState>
+  /** A full-resolution screenshot of a screen, to the Desktop, the clipboard, or for the canvas. */
+  screenshot(udid: string, screenID: number, target: SimulatorCaptureTarget, name: string): Promise<SimulatorActionResult & { path?: string }>
+  startRecording(udid: string, screenID: number, name: string): Promise<SimulatorActionResult>
+  stopRecording(udid: string): Promise<SimulatorActionResult & { path?: string }>
+  isRecording(udid: string): Promise<boolean>
   onFrame(nodeId: string, listener: (frame: SimulatorFrame) => void): () => void
   onStatus(nodeId: string, listener: (event: SimulatorStatusEvent) => void): () => void
 }
@@ -269,4 +280,140 @@ export function draggedSide(before: { w: number; h: number }, after: { w: number
   const dw = Math.abs(after.w - before.w) / Math.max(1, before.w)
   const dh = Math.abs(after.h - before.h) / Math.max(1, before.h)
   return dw >= dh ? 'width' : 'height'
+}
+
+// ── The ⋯ menu: device actions ─────────────────────────────────────────────────────────────────
+
+export type ContentSizeStep = 'increment' | 'decrement'
+export type BatteryState = 'charging' | 'charged' | 'discharging'
+export type PrivacyService =
+  | 'all' | 'calendar' | 'contacts-limited' | 'contacts' | 'location' | 'location-always' | 'photos-add'
+  | 'photos' | 'media-library' | 'microphone' | 'motion' | 'reminders' | 'siri'
+const PRIVACY_SERVICES: readonly PrivacyService[] = [
+  'all', 'calendar', 'contacts-limited', 'contacts', 'location', 'location-always', 'photos-add',
+  'photos', 'media-library', 'microphone', 'motion', 'reminders', 'siri'
+]
+
+export type SimulatorAction =
+  | { a: 'appearance'; value: 'light' | 'dark' }
+  | { a: 'content-size'; value: ContentSizeStep }
+  | { a: 'increase-contrast'; value: boolean }
+  | { a: 'location-set'; lat: number; lon: number }
+  | { a: 'location-run'; scenario: string }
+  | { a: 'location-clear' }
+  | { a: 'status-bar'; preset: 'clean' | 'clear' }
+  | { a: 'status-bar'; preset: 'battery'; batteryLevel: number; batteryState: BatteryState }
+  | { a: 'shake' }
+  | { a: 'biometric'; kind: 'face' | 'touch'; op: 'enroll' | 'unenroll' | 'match' | 'nomatch' }
+  | { a: 'open-url'; url: string }
+  | { a: 'push'; bundleId: string; payload: string }
+  | { a: 'privacy'; op: 'grant' | 'revoke' | 'reset'; service: PrivacyService; bundleId?: string }
+  | { a: 'pasteboard'; dir: 'to-device' | 'to-mac' }
+  | { a: 'install'; path: string }
+  | { a: 'add-media'; paths: string[] }
+  | { a: 'restart' }
+  | { a: 'erase' }
+  | { a: 'open-devicehub' }
+
+export type SimulatorActionResult = { ok: true; message?: string } | { ok: false; error: string }
+export type SimulatorCaptureTarget = 'desktop' | 'clipboard' | 'canvas'
+
+/** What the menu shows a ✓ for, and the location scenarios to offer. Parts that could not be read
+ *  are absent — never guessed. */
+export interface SimulatorDeviceState {
+  appearance?: 'light' | 'dark'
+  increaseContrast?: boolean
+  contentSize?: string
+  locationScenarios?: string[]
+}
+
+/** A bundle identifier: reverse-DNS, letters/digits/hyphen/dot. */
+export const BUNDLE_ID = /^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/
+const MAX_PUSH_BYTES = 4096 // APNs' own payload limit
+
+function absPath(v: unknown): v is string {
+  return typeof v === 'string' && v.startsWith('/') && v.length < 4096 && !CONTROL.test(v)
+}
+
+/** The only actions that reach `simctl`, rebuilt field by field. */
+export function normalizeSimulatorAction(raw: unknown): SimulatorAction | null {
+  if (!raw || typeof raw !== 'object') return null
+  const r = raw as Record<string, unknown>
+  switch (r.a) {
+    case 'appearance':
+      return r.value === 'light' || r.value === 'dark' ? { a: 'appearance', value: r.value } : null
+    case 'content-size':
+      return r.value === 'increment' || r.value === 'decrement' ? { a: 'content-size', value: r.value } : null
+    case 'increase-contrast':
+      return typeof r.value === 'boolean' ? { a: 'increase-contrast', value: r.value } : null
+    case 'location-set': {
+      const lat = Number(r.lat)
+      const lon = Number(r.lon)
+      return Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180
+        ? { a: 'location-set', lat, lon }
+        : null
+    }
+    case 'location-run':
+      return typeof r.scenario === 'string' && r.scenario.trim() && r.scenario.length <= 100 && !CONTROL.test(r.scenario)
+        ? { a: 'location-run', scenario: r.scenario.trim() }
+        : null
+    case 'location-clear':
+      return { a: 'location-clear' }
+    case 'status-bar':
+      if (r.preset === 'clean' || r.preset === 'clear') return { a: 'status-bar', preset: r.preset }
+      if (r.preset === 'battery') {
+        const level = Number(r.batteryLevel)
+        const state = r.batteryState
+        if (!Number.isInteger(level) || level < 0 || level > 100) return null
+        if (state !== 'charging' && state !== 'charged' && state !== 'discharging') return null
+        return { a: 'status-bar', preset: 'battery', batteryLevel: level, batteryState: state }
+      }
+      return null
+    case 'shake':
+      return { a: 'shake' }
+    case 'biometric':
+      return (r.kind === 'face' || r.kind === 'touch') && (r.op === 'enroll' || r.op === 'unenroll' || r.op === 'match' || r.op === 'nomatch')
+        ? { a: 'biometric', kind: r.kind, op: r.op }
+        : null
+    case 'open-url': {
+      if (typeof r.url !== 'string' || r.url.length > 4096 || CONTROL.test(r.url)) return null
+      // Any scheme an app might register (deep links), but it must BE a URL with a scheme.
+      return /^[A-Za-z][A-Za-z0-9+.-]*:/.test(r.url.trim()) ? { a: 'open-url', url: r.url.trim() } : null
+    }
+    case 'push': {
+      if (typeof r.bundleId !== 'string' || !BUNDLE_ID.test(r.bundleId) || typeof r.payload !== 'string') return null
+      if (new TextEncoder().encode(r.payload).length > MAX_PUSH_BYTES) return null
+      try {
+        const doc = JSON.parse(r.payload) as unknown
+        if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return null
+      } catch {
+        return null
+      }
+      return { a: 'push', bundleId: r.bundleId, payload: r.payload }
+    }
+    case 'privacy': {
+      if (r.op !== 'grant' && r.op !== 'revoke' && r.op !== 'reset') return null
+      if (!PRIVACY_SERVICES.includes(r.service as PrivacyService)) return null
+      if (r.bundleId !== undefined && (typeof r.bundleId !== 'string' || !BUNDLE_ID.test(r.bundleId))) return null
+      // grant/revoke need an app; reset may be device-wide.
+      if (r.op !== 'reset' && r.bundleId === undefined) return null
+      return { a: 'privacy', op: r.op, service: r.service as PrivacyService, ...(r.bundleId ? { bundleId: r.bundleId as string } : {}) }
+    }
+    case 'pasteboard':
+      return r.dir === 'to-device' || r.dir === 'to-mac' ? { a: 'pasteboard', dir: r.dir } : null
+    case 'install':
+      return absPath(r.path) ? { a: 'install', path: r.path } : null
+    case 'add-media':
+      return Array.isArray(r.paths) && r.paths.length > 0 && r.paths.length <= 50 && r.paths.every(absPath)
+        ? { a: 'add-media', paths: r.paths as string[] }
+        : null
+    case 'restart':
+      return { a: 'restart' }
+    case 'erase':
+      return { a: 'erase' }
+    case 'open-devicehub':
+      return { a: 'open-devicehub' }
+    default:
+      return null
+  }
 }

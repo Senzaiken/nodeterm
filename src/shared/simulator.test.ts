@@ -9,6 +9,7 @@ import {
   hidUsageForCode,
   rotateOrientation,
   type SimulatorOrientation,
+  normalizeSimulatorAction,
   normalizeSimulatorConfig,
   normalizeSimulatorInput,
   pointerToScreenRatio
@@ -76,8 +77,8 @@ describe('hidUsageForCode', () => {
 })
 
 describe('displayLabel', () => {
-  const cover = { index: 1, width: 1398, height: 2034, name: 'LCD' }
-  const inner = { index: 0, width: 2007, height: 2853, name: 'LCD-1' }
+  const cover = { index: 1, width: 1398, height: 2034, name: 'LCD', screenID: 1 }
+  const inner = { index: 0, width: 2007, height: 2853, name: 'LCD-1', screenID: 3 }
   it('names a foldable’s screens by size, and a single screen plainly', () => {
     expect(displayLabel(inner, [inner, cover])).toBe('Inner')
     expect(displayLabel(cover, [inner, cover])).toBe('Cover')
@@ -166,5 +167,32 @@ describe('fitNodeToScreen', () => {
   it('tells which side a hand resize was about', () => {
     expect(draggedSide({ w: 300, h: 600 }, { w: 450, h: 610 })).toBe('width')
     expect(draggedSide({ w: 300, h: 600 }, { w: 305, h: 800 })).toBe('height')
+  })
+})
+
+describe('normalizeSimulatorAction', () => {
+  it('accepts each action in its valid form', () => {
+    expect(normalizeSimulatorAction({ a: 'appearance', value: 'dark' })).toEqual({ a: 'appearance', value: 'dark' })
+    expect(normalizeSimulatorAction({ a: 'location-set', lat: 37.33, lon: -122.03 })).toEqual({ a: 'location-set', lat: 37.33, lon: -122.03 })
+    expect(normalizeSimulatorAction({ a: 'status-bar', preset: 'battery', batteryLevel: 20, batteryState: 'discharging' })).toEqual({
+      a: 'status-bar', preset: 'battery', batteryLevel: 20, batteryState: 'discharging'
+    })
+    expect(normalizeSimulatorAction({ a: 'open-url', url: 'myapp://deep/link' })).toEqual({ a: 'open-url', url: 'myapp://deep/link' })
+    expect(normalizeSimulatorAction({ a: 'push', bundleId: 'com.example.app', payload: '{"aps":{"alert":"hi"}}' })).toMatchObject({ a: 'push' })
+    expect(normalizeSimulatorAction({ a: 'privacy', op: 'reset', service: 'all' })).toEqual({ a: 'privacy', op: 'reset', service: 'all' })
+  })
+
+  it('refuses bad values instead of passing them to simctl', () => {
+    expect(normalizeSimulatorAction({ a: 'location-set', lat: 91, lon: 0 })).toBeNull()
+    expect(normalizeSimulatorAction({ a: 'status-bar', preset: 'battery', batteryLevel: 150, batteryState: 'charged' })).toBeNull()
+    expect(normalizeSimulatorAction({ a: 'open-url', url: 'not a url' })).toBeNull()
+    expect(normalizeSimulatorAction({ a: 'push', bundleId: 'com.example.app', payload: '[1,2]' })).toBeNull()
+    expect(normalizeSimulatorAction({ a: 'push', bundleId: 'x; rm -rf ~', payload: '{}' })).toBeNull()
+    expect(normalizeSimulatorAction({ a: 'push', bundleId: 'com.a.b', payload: JSON.stringify({ x: 'y'.repeat(5000) }) })).toBeNull()
+    expect(normalizeSimulatorAction({ a: 'privacy', op: 'grant', service: 'all' })).toBeNull() // grant needs an app
+    expect(normalizeSimulatorAction({ a: 'privacy', op: 'grant', service: 'keychain', bundleId: 'com.a.b' })).toBeNull()
+    expect(normalizeSimulatorAction({ a: 'install', path: 'relative/My.app' })).toBeNull()
+    expect(normalizeSimulatorAction({ a: 'add-media', paths: [] })).toBeNull()
+    expect(normalizeSimulatorAction({ a: 'erase-everything' })).toBeNull()
   })
 })

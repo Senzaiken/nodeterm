@@ -353,6 +353,7 @@ import { codexCliCaps, registerCodexCliIpc } from '../core/codex-cli'
 import { registerWallpaperIpc } from '../core/wallpaper'
 import { registerRunConfigIpc, stopAllRunWatches } from '../core/run-service'
 import { registerSimulatorIpc, stopAllSimulators } from '../core/simulator/simulator-service'
+import { stopAllRecordings } from '../core/simulator/simulator-actions'
 import {
   bindCodexThreadIdentity,
   setCodexThreadIdentityAuthSecret,
@@ -3998,6 +3999,7 @@ app.whenReady().then(async () => {
     stopAllRunWatches()
     // Simulator views' helpers exit with their stdin; end them explicitly at quit.
     stopAllSimulators()
+    stopAllRecordings()
   })
   ipcMain.on(
     IPC.agentControlResult,

@@ -11,6 +11,9 @@ import {
   rotateOrientation,
   pointerToScreenRatio,
   type SimulatorDisplayInfo,
+  type SimulatorAction,
+  type SimulatorCaptureTarget,
+  type SimulatorDeviceState,
   type SimulatorInput,
   type SimulatorNodeConfig,
   type SimulatorOrientation,
@@ -18,6 +21,8 @@ import {
 } from '@shared/simulator'
 import type { RunDevice } from '@shared/run-config'
 import { useSession } from '../session/session'
+import { ContextMenu } from '../components/ContextMenu'
+import { buildSimulatorMenu } from './simulatorMenu'
 import { NODE_MIN_SIZES } from '../lib/nodeSizing'
 import type { CanvasNode } from '../state/workspace'
 
@@ -58,6 +63,13 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
   const [pinned, setPinned] = useState(false)
   const [frameSize, setFrameSize] = useState<{ w: number; h: number } | null>(null)
   const [booting, setBooting] = useState(false)
+  const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null)
+  const [devState, setDevState] = useState<SimulatorDeviceState>({})
+  const [recording, setRecording] = useState(false)
+  const [toast, setToast] = useState<{ text: string; error?: boolean } | null>(null)
+  const [prompt, setPrompt] = useState<PromptSpec | null>(null)
+  const [confirm, setConfirm] = useState<ConfirmSpec | null>(null)
+  const [dropping, setDropping] = useState(false)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const screenRef = useRef<HTMLDivElement>(null)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -320,6 +332,21 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
   // Keys go to the device as physical keys (it applies its own layout and Shift). ⌘-chords stay
   // with nodeterm so the app's own shortcuts keep working while the screen has focus.
   const onKey = (down: boolean) => (e: React.KeyboardEvent) => {
+    if (e.target !== e.currentTarget) return
+    // ⌘V pastes the Mac clipboard: sync it to the device, then press ⌘V there.
+    if (phase === 'live' && e.metaKey && e.code === 'KeyV') {
+      e.preventDefault()
+      e.stopPropagation()
+      if (down && !e.repeat) {
+        void act({ a: 'pasteboard', dir: 'to-device' }).then(() => {
+          send({ t: 'key', usage: 0xe3, down: true })
+          send({ t: 'key', usage: 0x19, down: true })
+          send({ t: 'key', usage: 0x19, down: false })
+          send({ t: 'key', usage: 0xe3, down: false })
+        })
+      }
+      return
+    }
     // ⌘← / ⌘→ rotate, as they did in Simulator.app.
     if (phase === 'live' && e.metaKey && (e.code === 'ArrowLeft' || e.code === 'ArrowRight')) {
       e.preventDefault()
@@ -356,6 +383,163 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
     if (!udid) return
     await api.simulator.shutdown(udid)
     loadDevices(true)
+  }
+
+  // ── ⋯ menu ───────────────────────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!toast) return
+    const t = setTimeout(() => setToast(null), toast.error ? 6000 : 3500)
+    return () => clearTimeout(t)
+  }, [toast])
+
+  const say = (r: { ok: true; message?: string } | { ok: false; error: string }) => {
+    if (r.ok) {
+      if (r.message) setToast({ text: r.message })
+    } else setToast({ text: r.error, error: true })
+  }
+
+  const act = useCallback(
+    async (a: SimulatorAction) => {
+      if (!udid) return
+      const r = await api.simulator.action(udid, a)
+      say(r)
+      if (r.ok && (a.a === 'appearance' || a.a === 'increase-contrast' || a.a === 'content-size')) {
+        void api.simulator.state(udid).then(setDevState)
+      }
+      if (r.ok && (a.a === 'restart' || a.a === 'erase')) loadDevices(true)
+    },
+    [api, udid, loadDevices]
+  )
+
+  const activeScreenID = displays[activeDisplay]?.screenID ?? 0
+  const deviceName = (data.title as string) || config.name || 'Simulator'
+
+  const screenshot = async (target: SimulatorCaptureTarget) => {
+    if (!udid) return
+    const r = await api.simulator.screenshot(udid, activeScreenID, target, deviceName)
+    say(r)
+    if (r.ok && target === 'canvas' && r.path) window.dispatchEvent(new CustomEvent('nodeterm:open-file', { detail: { path: r.path } }))
+  }
+
+  const toggleRecording = async () => {
+    if (!udid) return
+    if (recording) {
+      const r = await api.simulator.stopRecording(udid)
+      setRecording(false)
+      say(r)
+      if (r.ok && r.path) window.dispatchEvent(new CustomEvent('nodeterm:open-file', { detail: { path: r.path } }))
+    } else {
+      const r = await api.simulator.startRecording(udid, activeScreenID, deviceName)
+      if (r.ok) setRecording(true)
+      else say(r)
+    }
+  }
+  useEffect(() => {
+    if (udid) void api.simulator.isRecording(udid).then(setRecording)
+  }, [api, udid])
+
+  /** One device point per canvas point: the framebuffer's pixels over the device's scale (2× iPad,
+   *  3× iPhone — the two scales current simulators use). */
+  const actualSize = () => {
+    const disp = displays[activeDisplay]
+    const root = rootRef.current
+    const screen = screenRef.current
+    if (!disp || !root || !screen) return
+    const scale = /ipad/i.test(device?.name ?? config.name ?? '') ? 2 : 3
+    const turned = ORIENTATION_DEGREES[orientationRef.current] % 180 !== 0
+    const w = Math.round((turned ? disp.height : disp.width) / scale + (root.offsetWidth - screen.offsetWidth))
+    const h = Math.round((turned ? disp.width : disp.height) / scale + (root.offsetHeight - screen.offsetHeight))
+    setNodes((ns) => ns.map((n) => (n.id !== id ? n : { ...n, width: w, height: h, style: { ...n.style, width: w, height: h } })))
+  }
+
+  const pickFile = async (kind: 'install' | 'media') => {
+    const p = await api.dialog.selectFile()
+    if (!p) return
+    if (kind === 'install') void act({ a: 'install', path: p })
+    else void act({ a: 'add-media', paths: [p] })
+  }
+
+  const openMenu = (e: React.MouseEvent) => {
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
+    setMenuAt({ x: r.left, y: r.bottom + 4 })
+    if (udid) void api.simulator.state(udid).then(setDevState)
+  }
+
+  const menuItems = buildSimulatorMenu(
+    {
+      button: (name) => send({ t: 'button', name }),
+      rotate,
+      action: (a) => void act(a),
+      screenshot: (t) => void screenshot(t),
+      toggleRecording: () => void toggleRecording(),
+      shutDown: () => void shutdown(),
+      confirmErase: () =>
+        setConfirm({
+          title: 'Reset Content and Settings?',
+          body: `Erases everything on “${deviceName}” — apps, data and settings — like a factory reset. It restarts afterwards.`,
+          confirmLabel: 'Erase',
+          onConfirm: () => void act({ a: 'erase' })
+        }),
+      promptCustomLocation: () =>
+        setPrompt({
+          title: 'Custom Location',
+          fields: [
+            { key: 'lat', label: 'Latitude', placeholder: '37.3349' },
+            { key: 'lon', label: 'Longitude', placeholder: '-122.0090' }
+          ],
+          submitLabel: 'Set Location',
+          onSubmit: (v) => void act({ a: 'location-set', lat: Number(v.lat), lon: Number(v.lon) })
+        }),
+      promptOpenUrl: () =>
+        setPrompt({
+          title: 'Open URL',
+          fields: [{ key: 'url', label: 'URL or deep link', placeholder: 'https://… or myapp://path' }],
+          submitLabel: 'Open',
+          onSubmit: (v) => void act({ a: 'open-url', url: v.url })
+        }),
+      promptPush: () =>
+        setPrompt({
+          title: 'Send Push Notification',
+          fields: [
+            { key: 'bundleId', label: 'App bundle ID', placeholder: 'com.example.app' },
+            {
+              key: 'payload',
+              label: 'Payload (JSON)',
+              multiline: true,
+              value: JSON.stringify({ aps: { alert: { title: 'Hello', body: 'From nodeterm' }, sound: 'default' } }, null, 2)
+            }
+          ],
+          submitLabel: 'Send',
+          onSubmit: (v) => void act({ a: 'push', bundleId: v.bundleId.trim(), payload: v.payload })
+        }),
+      promptPrivacy: (op) =>
+        setPrompt({
+          title: op === 'grant' ? 'Grant All Permissions' : 'Revoke All Permissions',
+          fields: [{ key: 'bundleId', label: 'App bundle ID', placeholder: 'com.example.app' }],
+          submitLabel: op === 'grant' ? 'Grant' : 'Revoke',
+          onSubmit: (v) => void act({ a: 'privacy', op, service: 'all', bundleId: v.bundleId.trim() })
+        }),
+      pickInstall: () => void pickFile('install'),
+      pickMedia: () => void pickFile('media'),
+      actualSize,
+      fitToScreen: () => fitToScreen('long')
+    },
+    { device: devState, recording }
+  )
+
+  // Drop a built .app to install it, photos/videos to add them to the library.
+  const onDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    setDropping(false)
+    if (!udid || phase !== 'live') return
+    const paths = Array.from(e.dataTransfer.files)
+      .map((f) => window.nodeTerminal.getPathForFile(f))
+      .filter(Boolean)
+    const apps = paths.filter((p) => /\.app\/?$/.test(p))
+    const media = paths.filter((p) => /\.(png|jpe?g|gif|heic|heif|webp|mov|mp4|m4v)$/i.test(p))
+    for (const app of apps) void act({ a: 'install', path: app.replace(/\/$/, '') })
+    if (media.length) void act({ a: 'add-media', paths: media })
+    if (!apps.length && !media.length) setToast({ text: 'Drop a built .app to install it, or photos and videos to add them to Photos.', error: true })
   }
 
   const statusText =
@@ -439,6 +623,16 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
               </button>
             </>
           )}
+          {recording && (
+            <button className="sim-node__rec" title="Recording — click to stop" onClick={() => void toggleRecording()}>
+              ● REC
+            </button>
+          )}
+          {udid && booted && (
+            <button className="run-bar__icon" title="More (everything DeviceHub offers)" aria-label="More" onClick={openMenu}>
+              ⋯
+            </button>
+          )}
           {statusText && <span className="run-bar__status">{statusText}</span>}
         </div>
         <div
@@ -452,6 +646,13 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
           onWheel={onWheel}
           onKeyDown={onKey(true)}
           onKeyUp={onKey(false)}
+          onDragOver={(e) => {
+            if (phase !== 'live') return
+            e.preventDefault()
+            setDropping(true)
+          }}
+          onDragLeave={() => setDropping(false)}
+          onDrop={onDrop}
         >
           <canvas ref={canvasRef} className="sim-node__frame" style={{ visibility: phase === 'live' ? 'visible' : 'hidden' }} />
           {phase !== 'live' && (
@@ -466,8 +667,34 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
             </div>
           )}
           {phase === 'live' && message && <div className="sim-node__note">{message}</div>}
+          {dropping && <div className="sim-node__drop">Drop a .app to install · photos or videos to add</div>}
         </div>
+        {toast && <div className={`sim-node__toast${toast.error ? ' sim-node__toast--error' : ''}`}>{toast.text}</div>}
+        {prompt && <SimPrompt spec={prompt} onClose={() => setPrompt(null)} />}
+        {confirm && (
+          <div className="sim-node__overlay nodrag nowheel">
+            <div className="sim-node__dialog">
+              <div className="sim-node__dialog-title">{confirm.title}</div>
+              <div className="sim-node__dialog-body">{confirm.body}</div>
+              <div className="sim-node__dialog-actions">
+                <button className="run-bar__btn" onClick={() => setConfirm(null)}>
+                  Cancel
+                </button>
+                <button
+                  className="run-bar__btn run-bar__btn--stop"
+                  onClick={() => {
+                    confirm.onConfirm()
+                    setConfirm(null)
+                  }}
+                >
+                  {confirm.confirmLabel}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
+      {menuAt && <ContextMenu x={menuAt.x} y={menuAt.y} items={menuItems} onClose={() => setMenuAt(null)} />}
       <NodeResizer
         minWidth={NODE_MIN_SIZES.simulator.width}
         minHeight={NODE_MIN_SIZES.simulator.height}
@@ -505,4 +732,82 @@ function clampedRatio(clientX: number, clientY: number, box: DOMRect, frame: { w
     x: Math.min(1, Math.max(0, (clientX - left) / (frame.w * scale))),
     y: Math.min(1, Math.max(0, (clientY - top) / (frame.h * scale)))
   }
+}
+
+interface PromptField {
+  key: string
+  label: string
+  placeholder?: string
+  multiline?: boolean
+  value?: string
+}
+interface PromptSpec {
+  title: string
+  fields: PromptField[]
+  submitLabel: string
+  onSubmit: (values: Record<string, string>) => void
+}
+interface ConfirmSpec {
+  title: string
+  body: string
+  confirmLabel: string
+  onConfirm: () => void
+}
+
+/** A small in-node form for the menu items that need a value (URL, push payload, coordinates). */
+function SimPrompt({ spec, onClose }: { spec: PromptSpec; onClose: () => void }) {
+  const [values, setValues] = useState<Record<string, string>>(() =>
+    Object.fromEntries(spec.fields.map((f) => [f.key, f.value ?? '']))
+  )
+  const submit = () => {
+    spec.onSubmit(values)
+    onClose()
+  }
+  return (
+    <div className="sim-node__overlay nodrag nowheel" onKeyDown={(e) => e.stopPropagation()}>
+      <form
+        className="sim-node__dialog"
+        onSubmit={(e) => {
+          e.preventDefault()
+          submit()
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') onClose()
+        }}
+      >
+        <div className="sim-node__dialog-title">{spec.title}</div>
+        {spec.fields.map((f, i) => (
+          <label key={f.key} className="sim-node__field">
+            <span>{f.label}</span>
+            {f.multiline ? (
+              <textarea
+                autoFocus={i === 0}
+                rows={7}
+                spellCheck={false}
+                value={values[f.key]}
+                placeholder={f.placeholder}
+                onChange={(e) => setValues((v) => ({ ...v, [f.key]: e.target.value }))}
+              />
+            ) : (
+              <input
+                autoFocus={i === 0}
+                spellCheck={false}
+                value={values[f.key]}
+                placeholder={f.placeholder}
+                onChange={(e) => setValues((v) => ({ ...v, [f.key]: e.target.value }))}
+              />
+            )}
+          </label>
+        ))}
+        <div className="sim-node__dialog-actions">
+          <button type="button" className="run-bar__btn" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="submit" className="run-bar__btn run-bar__btn--run">
+            {spec.submitLabel}
+          </button>
+        </div>
+      </form>
+    </div>
+  )
 }

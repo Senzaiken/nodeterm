@@ -15,7 +15,8 @@
  *   stdin   one JSON command per line:
  *             {"t":"down"|"move"|"up","x":0..1,"y":0..1}   a touch at a ratio of the screen
  *             {"t":"key","usage":N,"down":bool}            HID keyboard usage (page 7)
- *             {"t":"button","name":"home"|"lock"|"siri"|"volup"|"voldown"}
+ *             {"t":"button","name":"home"|"lock"|"side"|"siri"|"volup"|"voldown"|"playpause"}
+ *             {"t":"gesture","name":"app-switcher"}         swipe up from the bottom edge and hold
  *             {"t":"display","index":N|-1}                 pin a display; -1 = automatic
  *             {"t":"orientation","value":1..4}             GSEvent orientation (Purple values:
  *                                                          1 portrait, 2 upside down, 3/4 landscape)
@@ -23,7 +24,7 @@
  *
  * Kept free of backticks and dollar-brace sequences so it can live in a TypeScript string.
  */
-export const SIMBRIDGE_VERSION = 2
+export const SIMBRIDGE_VERSION = 3
 
 export const SIMBRIDGE_SOURCE = String.raw`
 import CoreGraphics
@@ -281,9 +282,9 @@ status(["ok": "ready"])
 
 /// A single-finger touch at a ratio of the screen. SimulatorKit only builds multi-touch messages,
 /// so the contact is sourced from one and re-enveloped as single-touch (idb's touchMessage).
-@Sendable func touch(x: Double, y: Double, down: Bool, target: UInt32) {
+@Sendable func touch(x: Double, y: Double, down: Bool, target: UInt32, edge: UInt32 = 0) {
   var point = CGPoint(x: x, y: y)
-  let source = messageForMouse(&point, nil, target, down ? 1 : 2, CGSize(width: 1, height: 1), 0)
+  let source = messageForMouse(&point, nil, target, down ? 1 : 2, CGSize(width: 1, height: 1), edge)
   source.advanced(by: 0x3c).storeBytes(of: x, as: Double.self)
   source.advanced(by: 0x44).storeBytes(of: y, as: Double.self)
   let size = 0x140, stride = 0x90
@@ -302,11 +303,11 @@ status(["ok": "ready"])
 
 /// Hardware buttons as HID Consumer-page usages to the digitizer service (0x32): the path that
 /// reaches a Face ID device, which ignores the legacy home-button source.
-let consumerUsage: [String: UInt32] = ["home": 0x40, "lock": 0x30, "siri": 0xCF, "volup": 0xE9, "voldown": 0xEA]
+let consumerUsage: [String: UInt32] = ["home": 0x40, "lock": 0x30, "side": 0x30, "siri": 0xCF, "volup": 0xE9, "voldown": 0xEA, "playpause": 0xCD]
 /// The legacy ButtonEventSource for the two buttons that have one (target 0x33). Used when the
 /// Consumer-usage path is refused: MEASURED on a foldable, where the digitizer-addressed home press
 /// came back "Mach port invalid" while touches to the screen's own target worked.
-let legacySource: [String: Int32] = ["home": 0, "lock": 1]
+let legacySource: [String: Int32] = ["home": 0, "lock": 1, "side": 0xBB8]
 typealias ButtonFn = @convention(c) (Int32, Int32, Int32) -> UnsafeMutableRawPointer
 let messageForButton: ButtonFn? = dlsym(sk, "IndigoHIDMessageForButton").map { unsafeBitCast($0, to: ButtonFn.self) }
 
@@ -328,6 +329,20 @@ let messageForButton: ButtonFn? = dlsym(sk, "IndigoHIDMessageForButton").map { u
       status(["error": "button", "message": "the simulator refused the " + name + " button"])
     }
   }
+}
+
+// ── Gestures ───────────────────────────────────────────────────────────────────────────────────
+/// The App Switcher on a Face ID device: a finger from the bottom edge, up past a third of the
+/// screen, a pause, then lift. The contact carries the bottom-edge flag (IndigoHIDEdgeBottom = 3):
+/// iOS recognises system edge gestures from that flag, not from where the finger started.
+@Sendable func appSwitcher(target: UInt32) {
+  let steps = 14
+  touch(x: 0.5, y: 0.995, down: true, target: target, edge: 3)
+  for i in 1...steps {
+    let y = 0.995 - 0.4 * Double(i) / Double(steps)
+    hidQueue.asyncAfter(deadline: .now() + 0.016 * Double(i)) { touch(x: 0.5, y: y, down: true, target: target, edge: 3) }
+  }
+  hidQueue.asyncAfter(deadline: .now() + 0.016 * Double(steps) + 0.6) { touch(x: 0.5, y: 0.595, down: false, target: target, edge: 3) }
 }
 
 // ── Orientation ────────────────────────────────────────────────────────────────────────────────
@@ -376,6 +391,11 @@ DispatchQueue.global().async {
       send(messageForKey(Int32(usage), down ? 1 : 2))
     case "button":
       button((cmd["name"] as? String) ?? "")
+    case "gesture":
+      if (cmd["name"] as? String) == "app-switcher" {
+        let target = frameQueue.sync { touchTarget(displays[activeIndex]) }
+        appSwitcher(target: target)
+      }
     case "orientation":
       guard let v = cmd["value"] as? Int, (1...4).contains(v) else { continue }
       orientation(UInt32(v))

@@ -1988,6 +1988,24 @@ session.
   com.apple.dt.Devices`) — Simulator.app is not supported. **macOS desktop only**: the add rows are
   disabled with `SIMULATOR_UNAVAILABLE_HINT` elsewhere, and the bridge/relay stub refuses (the helper
   must run on the Mac that has the simulators). Kanban: not a card. Mobile: N/A.
+  **A device takes input from its FIRST HID client only** (MEASURED: a second client's touches are
+  dropped without an error). So the host runs ONE helper per device, shared by every node showing
+  it (`bridges` keyed by UDID, a late joiner replayed the last displays/ready), and booting a
+  simulator no longer opens DeviceHub — DeviceHub showing the device is a client too, and it took
+  touch input away from the node. "Open in DeviceHub" (⋯ menu) says so in its tooltip.
+  **The ⋯ menu** (`simulatorMenu.tsx`, pure) is a complete map of DeviceHub's menus, from the
+  `…MenuItemProvider` names in Xcode 27's DeviceKit: what nodeterm can do runs — HID buttons
+  (Home/Lock/Side/Siri/Volume/Play-Pause) and rotation through the helper; everything else through
+  public `simctl` in `core/simulator/simulator-actions.ts` (appearance, text size, Increase
+  Contrast, location set/scenario/clear, status-bar overrides, shake and Face/Touch ID via the
+  simulator's own `notifyutil` notifications, Open URL, push, privacy, pasteboard sync, install,
+  add media, screenshot/recording, restart, erase) — and what it cannot is listed greyed out with
+  "(Not Supported)" and the reason (App Switcher: the edge-swipe gesture is not recognised from
+  outside DeviceHub; Action Button; Grayscale/Reduce Motion/Reduce Transparency/Liquid Glass: no
+  public command; tvOS/watchOS/visionOS controls; device management). Actions are re-validated
+  (`normalizeSimulatorAction`) and every argument is its own argv entry. All the simctl actions
+  were run live against an iOS 27 simulator; `simctl location list` is a TABLE
+  (`parseLocationScenarios` reads the first column).
 - **dino** (`DinoNode.tsx`) — a small self-contained T-Rex-style runner on a canvas (no PTY);
   high score persists via `data.highScore`.
 - **trigger** (`TriggerNode.tsx`) — a canvas-owned schedule (cron / interval / once) that

@@ -15,6 +15,7 @@ import { SIMULATOR_UDID } from '../../shared/run-config'
 import { renameAtomic, writeFileAtomic } from '../fs-atomic'
 import { platform } from '../platform'
 import { SIMBRIDGE_SOURCE, SIMBRIDGE_VERSION } from './simbridge-source'
+import { registerSimulatorActionIpc } from './simulator-actions'
 
 /**
  * Host side of the Simulator node: a live iOS simulator screen on the canvas, with touch, keyboard
@@ -35,14 +36,25 @@ const MAX_SESSIONS = 8
 const FRAME_HEADER = 20
 const MAX_FRAME_BYTES = 16 * 1024 * 1024
 
-interface Session {
+/**
+ * ONE helper per device, shared by every node showing it. MEASURED (Xcode 27): a device takes input
+ * from the FIRST HID client only — a second client's touches are silently dropped — so two nodes on
+ * one device, each with its own helper, would leave the second one unable to touch anything.
+ */
+interface Bridge {
   child: ChildProcessWithoutNullStreams
   udid: string
+  nodes: Set<string>
   stderr: string
   stopping: boolean
+  /** Replayed to a node that joins a running bridge, which would otherwise never hear them. */
+  lastDisplays: SimulatorStatusEvent | null
+  ready: boolean
 }
 
-const sessions = new Map<string, Session>()
+const bridges = new Map<string, Bridge>()
+/** nodeId → the device it is showing. */
+const nodeDevice = new Map<string, string>()
 
 // ── Compile ──────────────────────────────────────────────────────────────────────────────────────
 
@@ -120,7 +132,8 @@ export function parseBridgeStatus(line: string): SimulatorStatusEvent | null {
         index: d.index,
         width: d.width,
         height: d.height,
-        name: typeof d.name === 'string' ? d.name : ''
+        name: typeof d.name === 'string' ? d.name : '',
+        screenID: typeof d.screenID === 'number' ? d.screenID : 0
       })
     }
     return { kind: 'displays', displays, active: typeof o.active === 'number' ? o.active : 0, pinned: o.pinned === true }
@@ -153,42 +166,55 @@ export function frameParser(onFrame: (f: { width: number; height: number; displa
   }
 }
 
-export async function startSimulator(nodeId: unknown, udid: unknown): Promise<SimulatorStartResult> {
+export async function startSimulator(nodeId: unknown, udidRaw: unknown): Promise<SimulatorStartResult> {
   if (typeof nodeId !== 'string' || !SIMULATOR_NODE_ID.test(nodeId)) return { ok: false, error: 'Invalid node.' }
-  if (typeof udid !== 'string' || !SIMULATOR_UDID.test(udid)) return { ok: false, error: 'Pick a simulator.' }
-  const existing = sessions.get(nodeId)
-  if (existing && existing.udid === udid.toUpperCase() && !existing.stopping) return { ok: true }
-  stopSimulator(nodeId)
-  if (sessions.size >= MAX_SESSIONS) return { ok: false, error: `At most ${MAX_SESSIONS} simulator views can stream at once.` }
-  const bridge = await ensureBridge()
-  if (!bridge.ok) return bridge
-  const child = spawn(bridge.path, [udid.toUpperCase(), '--fps', '30', '--max-width', '900', '--quality', '0.6'], {
-    stdio: ['pipe', 'pipe', 'pipe']
-  })
-  const session: Session = { child, udid: udid.toUpperCase(), stderr: '', stopping: false }
-  sessions.set(nodeId, session)
-  const parse = frameParser((f) => platform().broadcast(IPC.simulatorFrame(nodeId), f))
+  if (typeof udidRaw !== 'string' || !SIMULATOR_UDID.test(udidRaw)) return { ok: false, error: 'Pick a simulator.' }
+  const udid = udidRaw.toUpperCase()
+  if (nodeDevice.get(nodeId) !== udid) stopSimulator(nodeId)
+  const running = bridges.get(udid)
+  if (running && !running.stopping) {
+    running.nodes.add(nodeId)
+    nodeDevice.set(nodeId, udid)
+    if (running.lastDisplays) emitStatus(nodeId, running.lastDisplays)
+    if (running.ready) emitStatus(nodeId, { kind: 'ready' })
+    return { ok: true }
+  }
+  if (bridges.size >= MAX_SESSIONS) return { ok: false, error: `At most ${MAX_SESSIONS} simulators can stream at once.` }
+  const helper = await ensureBridge()
+  if (!helper.ok) return helper
+  const child = spawn(helper.path, [udid, '--fps', '30', '--max-width', '900', '--quality', '0.6'], { stdio: ['pipe', 'pipe', 'pipe'] })
+  const bridge: Bridge = { child, udid, nodes: new Set([nodeId]), stderr: '', stopping: false, lastDisplays: null, ready: false }
+  bridges.set(udid, bridge)
+  nodeDevice.set(nodeId, udid)
+  const each = (fn: (id: string) => void) => {
+    for (const id of bridge.nodes) fn(id)
+  }
+  const parse = frameParser((f) => each((id) => platform().broadcast(IPC.simulatorFrame(id), f)))
   child.stdout.on('data', (chunk: Buffer) => {
     if (!parse(chunk)) {
-      emitStatus(nodeId, { kind: 'error', code: 'protocol', message: 'The simulator helper sent an unreadable frame.' })
+      each((id) => emitStatus(id, { kind: 'error', code: 'protocol', message: 'The simulator helper sent an unreadable frame.' }))
       child.kill()
     }
   })
   child.stderr.on('data', (chunk: Buffer) => {
-    session.stderr += chunk.toString('utf8')
+    bridge.stderr += chunk.toString('utf8')
     let nl: number
-    while ((nl = session.stderr.indexOf('\n')) >= 0) {
-      const line = session.stderr.slice(0, nl)
-      session.stderr = session.stderr.slice(nl + 1)
+    while ((nl = bridge.stderr.indexOf('\n')) >= 0) {
+      const line = bridge.stderr.slice(0, nl)
+      bridge.stderr = bridge.stderr.slice(nl + 1)
       const event = parseBridgeStatus(line)
-      if (event) emitStatus(nodeId, event)
+      if (!event) continue
+      if (event.kind === 'displays') bridge.lastDisplays = event
+      if (event.kind === 'ready') bridge.ready = true
+      each((id) => emitStatus(id, event))
     }
-    if (session.stderr.length > 64 * 1024) session.stderr = session.stderr.slice(-8 * 1024)
+    if (bridge.stderr.length > 64 * 1024) bridge.stderr = bridge.stderr.slice(-8 * 1024)
   })
-  child.on('error', (e) => emitStatus(nodeId, { kind: 'error', code: 'spawn', message: e.message }))
+  child.on('error', (e) => each((id) => emitStatus(id, { kind: 'error', code: 'spawn', message: e.message })))
   child.on('exit', (code, signal) => {
-    if (sessions.get(nodeId) === session) sessions.delete(nodeId)
-    if (!session.stopping) emitStatus(nodeId, { kind: 'exited', code: code ?? null, signal: signal ?? null })
+    if (bridges.get(udid) === bridge) bridges.delete(udid)
+    if (!bridge.stopping) each((id) => emitStatus(id, { kind: 'exited', code: code ?? null, signal: signal ?? null }))
+    for (const id of bridge.nodes) if (nodeDevice.get(id) === udid) nodeDevice.delete(id)
   })
   child.stdin.on('error', () => undefined) // the helper exiting closes stdin; its exit event says why
   return { ok: true }
@@ -196,27 +222,32 @@ export async function startSimulator(nodeId: unknown, udid: unknown): Promise<Si
 
 export function stopSimulator(nodeId: unknown): void {
   if (typeof nodeId !== 'string') return
-  const s = sessions.get(nodeId)
-  if (!s) return
-  s.stopping = true
-  sessions.delete(nodeId)
-  s.child.stdin.end() // the helper exits when stdin closes
+  const udid = nodeDevice.get(nodeId)
+  nodeDevice.delete(nodeId)
+  const b = udid ? bridges.get(udid) : undefined
+  if (!b) return
+  b.nodes.delete(nodeId)
+  if (b.nodes.size > 0) return // another node still shows this device
+  b.stopping = true
+  bridges.delete(b.udid)
+  b.child.stdin.end() // the helper exits when stdin closes
   setTimeout(() => {
-    if (s.child.exitCode === null && s.child.signalCode === null) s.child.kill('SIGTERM')
+    if (b.child.exitCode === null && b.child.signalCode === null) b.child.kill('SIGTERM')
   }, 1000).unref?.()
 }
 
 export function sendSimulatorInput(nodeId: unknown, raw: unknown): boolean {
   if (typeof nodeId !== 'string') return false
-  const s = sessions.get(nodeId)
+  const udid = nodeDevice.get(nodeId)
+  const b = udid ? bridges.get(udid) : undefined
   const cmd = normalizeSimulatorInput(raw)
-  if (!s || !cmd || s.child.stdin.destroyed) return false
-  s.child.stdin.write(JSON.stringify(cmd) + '\n')
+  if (!b || !cmd || b.child.stdin.destroyed) return false
+  b.child.stdin.write(JSON.stringify(cmd) + '\n')
   return true
 }
 
 export function stopAllSimulators(): void {
-  for (const id of [...sessions.keys()]) stopSimulator(id)
+  for (const id of [...nodeDevice.keys()]) stopSimulator(id)
 }
 
 export async function shutdownSimulator(udid: unknown): Promise<boolean> {
@@ -234,4 +265,5 @@ export function registerSimulatorIpc(): void {
   platform().handle(IPC.simulatorStop, (nodeId: unknown) => stopSimulator(nodeId))
   platform().handle(IPC.simulatorInput, (nodeId: unknown, cmd: unknown) => sendSimulatorInput(nodeId, cmd))
   platform().handle(IPC.simulatorShutdown, (udid: unknown) => shutdownSimulator(udid))
+  registerSimulatorActionIpc()
 }

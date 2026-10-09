@@ -396,6 +396,12 @@ export const IPC = {
   simulatorStop: 'simulator:stop',
   simulatorInput: 'simulator:input',
   simulatorShutdown: 'simulator:shutdown',
+  simulatorAction: 'simulator:action',
+  simulatorState: 'simulator:state',
+  simulatorScreenshot: 'simulator:screenshot',
+  simulatorRecordStart: 'simulator:record-start',
+  simulatorRecordStop: 'simulator:record-stop',
+  simulatorRecording: 'simulator:recording',
   // Trigger nodes (issue #493): machine-local arm/disarm + the card's status/run-now.
   triggersArm: 'triggers:arm',
   triggersDisarm: 'triggers:disarm',
