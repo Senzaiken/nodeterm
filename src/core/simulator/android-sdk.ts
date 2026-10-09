@@ -1,5 +1,5 @@
 import { execFile, spawn } from 'node:child_process'
-import { mkdir, open, readFile, readdir, stat } from 'node:fs/promises'
+import { mkdir, open, readdir, stat } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
@@ -99,14 +99,25 @@ export function parseIni(text: string): Record<string, string> {
   return out
 }
 
-async function readIni(p: string): Promise<Record<string, string> | null> {
+/** A small regular file's text, or null. Checked and read through ONE open handle, so the file
+ *  that passed the check is the file that is read (no swap in between). */
+async function readSmallFile(p: string, max: number): Promise<string | null> {
+  let h: Awaited<ReturnType<typeof open>> | null = null
   try {
-    const s = await stat(p)
-    if (!s.isFile() || s.size > 256 * 1024) return null
-    return parseIni(await readFile(p, 'utf8'))
+    h = await open(p, 'r')
+    const s = await h.stat()
+    if (!s.isFile() || s.size > max) return null
+    return await h.readFile('utf8')
   } catch {
     return null
+  } finally {
+    await h?.close().catch(() => undefined)
   }
+}
+
+async function readIni(p: string): Promise<Record<string, string> | null> {
+  const text = await readSmallFile(p, 256 * 1024)
+  return text === null ? null : parseIni(text)
 }
 
 export interface AvdInfo {
@@ -238,13 +249,10 @@ export async function runningEmulators(): Promise<RunningEmulator[]> {
       if (!m) continue
       const pid = Number(m[1])
       if (!pidAlive(pid)) continue
-      try {
-        const text = await readFile(path.join(dir, name), 'utf8')
-        const e = parseDiscovery(text, pid)
-        if (e) out.push(e)
-      } catch {
-        /* being written or removed */
-      }
+      // Unreadable = being written or removed.
+      const text = await readSmallFile(path.join(dir, name), 64 * 1024)
+      const e = text === null ? null : parseDiscovery(text, pid)
+      if (e) out.push(e)
     }
   }
   return out
@@ -297,9 +305,11 @@ export async function bootAndroid(avd: string): Promise<{ ok: true } | { ok: fal
   const logDir = path.join(platform().userDataDir, 'android-emulator')
   await mkdir(logDir, { recursive: true })
   const logPath = path.join(logDir, `${avd}.log`)
-  const log = await open(logPath, 'w')
-  let exited: { code: number | null } | null = null
+  // The log is read back through the SAME handle the emulator writes to, never by path again, so
+  // what is reported is that emulator's own output. Positional reads leave the shared offset alone.
+  const log = await open(logPath, 'w+')
   try {
+    let exited: { code: number | null } | null = null
     const child = spawn(bin, ['-avd', avd, '-no-window'], {
       detached: true,
       stdio: ['ignore', log.fd, log.fd],
@@ -308,19 +318,28 @@ export async function bootAndroid(avd: string): Promise<{ ok: true } | { ok: fal
     child.on('exit', (code) => (exited = { code }))
     child.on('error', () => (exited = { code: null }))
     child.unref()
-  } finally {
-    await log.close()
-  }
-  const deadline = Date.now() + BOOT_WAIT_MS
-  while (Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, 500))
-    if (await findRunning(avd)) return { ok: true }
-    if (exited) {
-      const tail = lastError(await readFile(logPath, 'utf8').catch(() => ''))
-      return { ok: false, error: tail ? `The emulator stopped: ${tail}` : 'The emulator stopped while starting.' }
+    const deadline = Date.now() + BOOT_WAIT_MS
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 500))
+      if (await findRunning(avd)) return { ok: true }
+      if (exited) {
+        const tail = lastError(await readLogTail(log).catch(() => ''))
+        return { ok: false, error: tail ? `The emulator stopped: ${tail}` : 'The emulator stopped while starting.' }
+      }
     }
+    return { ok: false, error: 'The emulator did not come up within two minutes.' }
+  } finally {
+    await log.close().catch(() => undefined)
   }
-  return { ok: false, error: 'The emulator did not come up within two minutes.' }
+}
+
+/** The last 64 KB of an open log, read at explicit positions. */
+async function readLogTail(h: Awaited<ReturnType<typeof open>>): Promise<string> {
+  const { size } = await h.stat()
+  const len = Math.min(size, 64 * 1024)
+  const buf = Buffer.alloc(len)
+  const { bytesRead } = await h.read(buf, 0, len, size - len)
+  return buf.subarray(0, bytesRead).toString('utf8')
 }
 
 /** The most useful line of an emulator log: its last ERROR / FATAL line, else its last line. */
