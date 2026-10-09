@@ -81,11 +81,13 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
         raf = requestAnimationFrame(() => {
           raf = 0
           if (!pending || !imgRef.current) return
-          const old = objectUrl
-          objectUrl = pending.url
-          imgRef.current.src = pending.url
-          setFrameSize((s) => (s && s.w === pending!.w && s.h === pending!.h ? s : { w: pending!.w, h: pending!.h }))
+          // Copy before clearing: React runs the state updater LATER, after `pending` is null.
+          const { url, w, h } = pending
           pending = null
+          const old = objectUrl
+          objectUrl = url
+          imgRef.current.src = url
+          setFrameSize((s) => (s && s.w === w && s.h === h ? s : { w, h }))
           setPhase('live')
           if (old) URL.revokeObjectURL(old)
         })
