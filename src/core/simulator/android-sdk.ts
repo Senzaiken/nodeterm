@@ -266,15 +266,19 @@ export async function listAndroidDevices(): Promise<{ devices: SimulatorDevice[]
       error: sdk ? undefined : 'The Android SDK was not found (set ANDROID_HOME, or install Android Studio).'
     }
   }
-  const up = new Set(running.map((r) => r.avd))
+  const serialOf = new Map(running.map((r) => [r.avd, r.serial]))
   return {
-    devices: avds.map((a) => ({
-      id: androidDeviceId(a.name),
-      name: a.displayName,
-      platform: 'android' as const,
-      os: a.os,
-      state: up.has(a.name) ? ('booted' as const) : ('shutdown' as const)
-    }))
+    devices: avds.map((a) => {
+      const serial = serialOf.get(a.name)
+      return {
+        id: androidDeviceId(a.name),
+        name: a.displayName,
+        platform: 'android' as const,
+        os: a.os,
+        state: serialOf.has(a.name) ? ('booted' as const) : ('shutdown' as const),
+        ...(serial ? { serial } : {})
+      }
+    })
   }
 }
 

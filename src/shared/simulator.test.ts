@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  touchEdge,
+  TOUCH_EDGE_MARGIN,
   normalizeDeviceId,
   simulatorPlatformOf,
   afterTouch,
@@ -231,5 +233,26 @@ describe('Android device ids', () => {
     expect(normalizeSimulatorAction({ a: 'clipboard-set', text: 'hi' })).toEqual({ a: 'clipboard-set', text: 'hi' })
     expect(normalizeSimulatorAction({ a: 'clipboard-set', text: 'a\u0000b' })).toBeNull()
     expect(normalizeSimulatorAction({ a: 'clipboard-set', text: 'x'.repeat(64_001) })).toBeNull()
+  })
+})
+
+describe('touchEdge', () => {
+  it('names the panel edge a touch starts on, by the measured values', () => {
+    expect(touchEdge(0.5, 0.995)).toBe(3) // bottom: the home swipe
+    expect(touchEdge(0.001, 0.5)).toBe(2) // left
+    expect(touchEdge(0.999, 0.5)).toBe(4) // right
+    expect(touchEdge(0.5, 0.001)).toBe(1) // top
+    expect(touchEdge(0.5, 0.5)).toBe(0)
+    expect(touchEdge(0.5, 1 - TOUCH_EDGE_MARGIN - 0.01)).toBe(0)
+  })
+
+  it('picks the nearer edge in a corner', () => {
+    expect(touchEdge(0.02, 0.999)).toBe(3)
+  })
+
+  it('passes a valid edge through input validation and drops anything else', () => {
+    expect(normalizeSimulatorInput({ t: 'down', x: 0.5, y: 1, edge: 3 })).toEqual({ t: 'down', x: 0.5, y: 1, edge: 3 })
+    expect(normalizeSimulatorInput({ t: 'move', x: 0.5, y: 1, edge: 9 })).toEqual({ t: 'move', x: 0.5, y: 1 })
+    expect(normalizeSimulatorInput({ t: 'up', x: 0.5, y: 1, edge: '3' })).toEqual({ t: 'up', x: 0.5, y: 1, edge: 3 })
   })
 })

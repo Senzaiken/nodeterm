@@ -12,6 +12,7 @@ import {
   fitNodeToScreen,
   hidUsageForCode,
   picturePreRotated,
+  touchEdge,
   rotateOrientation,
   simulatorPlatformOf,
   pointerToScreenRatio,
@@ -24,7 +25,8 @@ import {
   type SimulatorInput,
   type SimulatorNodeConfig,
   type SimulatorOrientation,
-  type SimulatorStatusEvent
+  type SimulatorStatusEvent,
+  type TouchEdge
 } from '@shared/simulator'
 import { useSession } from '../session/session'
 import { ContextMenu } from '../components/ContextMenu'
@@ -260,13 +262,20 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
   }, [frameSize?.w, frameSize?.h])
 
   // ── Input ────────────────────────────────────────────────────────────────────────────────────
+  const touchEdgeRef = useRef<TouchEdge>(0)
   // Touches are measured on the (turned) picture and sent in portrait framebuffer coordinates.
   const send = useCallback(
     (cmd: SimulatorInput) => {
-      const out =
-        cmd.t === 'down' || cmd.t === 'move' || cmd.t === 'up'
-          ? { ...cmd, ...displayToFramebuffer(cmd.x, cmd.y, orientationRef.current) }
-          : cmd
+      let out: SimulatorInput = cmd
+      if (cmd.t === 'down' || cmd.t === 'move' || cmd.t === 'up') {
+        const p = displayToFramebuffer(cmd.x, cmd.y, orientationRef.current)
+        // The panel edge the finger went down on rides the whole contact: it is how iOS tells the
+        // home swipe (up from the bottom) from a drag in the app. Android has no such flag.
+        if (cmd.t === 'down') touchEdgeRef.current = platRef.current === 'ios' ? touchEdge(p.x, p.y) : 0
+        const edge = touchEdgeRef.current
+        out = { ...cmd, ...p, ...(edge ? { edge } : {}) }
+        if (cmd.t === 'up') touchEdgeRef.current = 0
+      }
       void api.simulator.input(id, out)
     },
     [api, id]

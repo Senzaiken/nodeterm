@@ -49,6 +49,8 @@ export interface SimulatorDevice {
   /** "iOS 27.1", "API 34". */
   os?: string
   state: 'booted' | 'shutdown'
+  /** A running Android device's adb serial (`emulator-5554`) — how Flutter and the run node name it. */
+  serial?: string
 }
 
 export interface SimulatorDevicesResult {
@@ -147,6 +149,32 @@ export type SimulatorButton = 'home' | 'lock' | 'side' | 'siri' | 'volup' | 'vol
 const BUTTONS: readonly SimulatorButton[] = ['home', 'lock', 'side', 'siri', 'volup', 'voldown', 'playpause', 'back', 'recents']
 
 /**
+ * The panel edge a touch starts on, as the iOS digitizer reports it (Indigo's edge field). iOS
+ * recognises its system edge gestures from this flag, not from where the finger lands: MEASURED
+ * (Xcode 27, iPhone 17 + iPad Pro): a swipe up from the very bottom without the flag only scrolled
+ * the app; with 3 it went home. The values name PHYSICAL edges of the portrait panel — on an iPad
+ * turned left, the home swipe (from the bottom of the turned picture, i.e. the panel's left edge)
+ * was recognised with 2 and not with 1, 3 or 4; turned right, with 4. Top = 1 is inferred.
+ */
+export type TouchEdge = 0 | 1 | 2 | 3 | 4
+/** How close to an edge (as a fraction of that side) a touch must go down to count as from it. */
+export const TOUCH_EDGE_MARGIN = 0.025
+
+/** The edge a touch going down at this PANEL point (0..1 portrait framebuffer) starts on. */
+export function touchEdge(x: number, y: number): TouchEdge {
+  const m = TOUCH_EDGE_MARGIN
+  const candidates: Array<[number, TouchEdge]> = [
+    [y, 1],
+    [x, 2],
+    [1 - y, 3],
+    [1 - x, 4]
+  ]
+  let best: [number, TouchEdge] | null = null
+  for (const c of candidates) if (c[0] <= m && (!best || c[0] < best[0])) best = c
+  return best ? best[1] : 0
+}
+
+/**
  * An Android emulator's hardware buttons, as the W3C key names its gRPC interface maps to Android
  * keys. MEASURED (emulator 36.6.11): GoHome, GoBack and AppSwitch each did what the device's own
  * buttons do. iOS-only buttons have no entry and are refused.
@@ -177,7 +205,8 @@ export function picturePreRotated(p: SimulatorPlatform): boolean {
 }
 
 export type SimulatorInput =
-  | { t: 'down' | 'move' | 'up'; x: number; y: number }
+  /** `edge`: the panel edge the contact started on (see touchEdge); 0 / absent = none. */
+  | { t: 'down' | 'move' | 'up'; x: number; y: number; edge?: TouchEdge }
   | { t: 'key'; usage: number; down: boolean }
   | { t: 'button'; name: SimulatorButton }
   | { t: 'display'; index: number }
@@ -195,7 +224,10 @@ export function normalizeSimulatorInput(raw: unknown): SimulatorInput | null {
       const x = Number(r.x)
       const y = Number(r.y)
       if (!Number.isFinite(x) || !Number.isFinite(y)) return null
-      return { t: r.t, x: Math.min(1, Math.max(0, x)), y: Math.min(1, Math.max(0, y)) }
+      const out: SimulatorInput = { t: r.t, x: Math.min(1, Math.max(0, x)), y: Math.min(1, Math.max(0, y)) }
+      const edge = Number(r.edge)
+      if (Number.isInteger(edge) && edge >= 1 && edge <= 4) out.edge = edge as TouchEdge
+      return out
     }
     case 'key': {
       const usage = Number(r.usage)

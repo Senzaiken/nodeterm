@@ -16,6 +16,7 @@
  *             {"t":"down"|"move"|"up","x":0..1,"y":0..1}   a touch at a ratio of the screen
  *             {"t":"key","usage":N,"down":bool}            HID keyboard usage (page 7)
  *             {"t":"button","name":"home"|"lock"|"side"|"siri"|"volup"|"voldown"|"playpause"}
+ *             (down/move/up take an optional "edge": 1 top, 2 left, 3 bottom, 4 right)
  *             {"t":"gesture","name":"app-switcher"}         swipe up from the bottom edge and hold
  *             {"t":"display","index":N|-1}                 pin a display; -1 = automatic
  *             {"t":"orientation","value":1..4}             GSEvent orientation (Purple values:
@@ -24,7 +25,7 @@
  *
  * Kept free of backticks and dollar-brace sequences so it can live in a TypeScript string.
  */
-export const SIMBRIDGE_VERSION = 3
+export const SIMBRIDGE_VERSION = 4
 
 export const SIMBRIDGE_SOURCE = String.raw`
 import CoreGraphics
@@ -385,7 +386,10 @@ DispatchQueue.global().async {
     case "down", "move", "up":
       guard let x = cmd["x"] as? Double, let y = cmd["y"] as? Double, x.isFinite, y.isFinite else { continue }
       let target = frameQueue.sync { touchTarget(displays[activeIndex]) }
-      touch(x: min(1, max(0, x)), y: min(1, max(0, y)), down: t != "up", target: target)
+      // The panel edge the contact started on (1 top, 2 left, 3 bottom, 4 right): iOS recognises
+      // its edge gestures — the home swipe up from the bottom — from this flag alone.
+      let edge = UInt32(min(4, max(0, (cmd["edge"] as? Int) ?? 0)))
+      touch(x: min(1, max(0, x)), y: min(1, max(0, y)), down: t != "up", target: target, edge: edge)
     case "key":
       guard let usage = cmd["usage"] as? Int, (0..<256).contains(usage), let down = cmd["down"] as? Bool else { continue }
       send(messageForKey(Int32(usage), down ? 1 : 2))

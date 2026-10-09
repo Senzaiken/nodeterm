@@ -2007,6 +2007,15 @@ session.
   (`normalizeSimulatorAction`) and every argument is its own argv entry. All the simctl actions
   were run live against an iOS 27 simulator; `simctl location list` is a TABLE
   (`parseLocationScenarios` reads the first column).
+  **Edge swipes carry the panel edge they start on** (`touchEdge`, `TOUCH_EDGE_MARGIN` 2.5%):
+  iOS recognises its system edge gestures — the home swipe up from the bottom — from the Indigo
+  contact's edge field, not from where the finger lands. MEASURED (Xcode 27): without the flag a
+  swipe up from the very bottom only scrolled the app; 1 top / 2 left / 3 bottom / 4 right name
+  PHYSICAL panel edges (an iPad turned left went home with 2, turned right with 4; top inferred), so
+  the node computes the edge after mapping the touch to the panel and it holds for the whole
+  contact. A swipe down from the top worked without it. The run node's 📱 opens a Simulator node on
+  every run node: the run's device preselected when it is an iOS UDID or an Android emulator's adb
+  serial (`SimulatorDevice.serial`), else empty for the user to pick.
   **Android virtual devices** use the same node (`core/simulator/android-*.ts`). A device id is
   `avd:<name>` (the AVD name is stable; adb serials are not) in the same persisted `udid` field.
   The picker lists every AVD read from files (`<avdHome>/<name>.ini` → `config.ini`; no

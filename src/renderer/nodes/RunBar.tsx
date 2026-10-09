@@ -416,6 +416,26 @@ export function RunBar({ nodeId, config, autoStart }: Props) {
     return () => ro.disconnect()
   }, [showTerminal, fitCompact])
 
+  // 📱: a Simulator node beside this one. The run's device is preselected when it is a simulator —
+  // an iOS UDID, or an Android emulator's adb serial (what Flutter names it), mapped to its virtual
+  // device — and otherwise the node opens empty for the user to pick any.
+  const openSimulator = async () => {
+    const id = showDevice ? config.deviceId : undefined
+    let udid: string | undefined
+    let name: string | undefined
+    if (id && SIMULATOR_UDID.test(id)) {
+      udid = id
+      name = device?.name ?? config.deviceName
+    } else if (id && /^emulator-\d+$/.test(id)) {
+      const avd = (await api.simulator.devices().catch(() => ({ devices: [] }))).devices.find((d) => d.serial === id)
+      if (avd) {
+        udid = avd.id
+        name = avd.name
+      }
+    }
+    window.dispatchEvent(new CustomEvent('nodeterm:open-simulator', { detail: { sourceNodeId: nodeId, udid, name } }))
+  }
+
   const toggleTerminal = useCallback(() => {
     const next = !showTerminal
     setNodes((ns) =>
@@ -629,19 +649,13 @@ export function RunBar({ nodeId, config, autoStart }: Props) {
         <span className="run-bar__spacer" />
 
         <span className={`run-bar__status run-bar__status--${statusKind}`}>{statusText}</span>
-        {showDevice && config.deviceId && SIMULATOR_UDID.test(config.deviceId) && simulatorAvailable() && (
+        {simulatorAvailable() && (
           <button
             type="button"
             className="run-bar__icon"
-            title="Show this simulator on the canvas"
+            title="Show a simulator on the canvas — this run's device when it is one, or pick any"
             aria-label="Show simulator"
-            onClick={() =>
-              window.dispatchEvent(
-                new CustomEvent('nodeterm:open-simulator', {
-                  detail: { sourceNodeId: nodeId, udid: config.deviceId, name: device?.name ?? config.deviceName }
-                })
-              )
-            }
+            onClick={() => void openSimulator()}
           >
             📱
           </button>
