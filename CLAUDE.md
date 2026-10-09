@@ -2017,13 +2017,15 @@ session.
   **Inside a run node.** The screen, toolbar, ⋯ menu and input are one component, `SimulatorView`;
   `SimulatorNode` is a thin box around it (title, close, resize handles, fit-to-screen), and a run
   node mounts the same view under its control rows when `data.runSimulator` is present (persisted,
-  `normalizeInlineSimulatorConfig`: device + panel height). 📱 on every run node toggles that panel
+  `normalizeInlineSimulatorConfig`: the device only — the panel FILLS the node, so resizing the
+  node scales the screen, letterboxed; no size of its own is stored). 📱 on every run node toggles that panel
   (the run's device preselected when it is an iOS UDID or an Android emulator's adb serial,
   `SimulatorDevice.serial`; else empty to pick); ⇱ splits it into a Simulator node carrying
   `dockTo: <runNodeId>`, whose ⇲ (or the run node's 📱) docks it back. The inline stream is keyed
-  `<runNodeId>.sim`. The panel sits INSIDE the run bar, so the compact (terminal hidden) fit sizes
-  the node around it; with the terminal shown, the node grows / shrinks by the panel. Inline there
-  is no node of its own to size, so Actual Size / Fit to Screen are greyed out there.
+  `<runNodeId>.sim`. While it is open the compact (terminal hidden) height fit stands down — the
+  node's size is the user's — and the run bar flexes to fill the node; opening grows the node by
+  `INLINE_SIM_HEIGHT`, closing hands that back. Inline there is no node of its own to snap to the
+  screen's shape, so Actual Size / Fit to Screen are greyed out there (pop out for those).
   **Android virtual devices** use the same node (`core/simulator/android-*.ts`). A device id is
   `avd:<name>` (the AVD name is stable; adb serials are not) in the same persisted `udid` field.
   The picker lists every AVD read from files (`<avdHome>/<name>.ini` → `config.ini`; no

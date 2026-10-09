@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import {
-  INLINE_SIM_HEIGHT,
   normalizeInlineSimulatorConfig,
   touchEdge,
   TOUCH_EDGE_MARGIN,
@@ -260,13 +259,8 @@ describe('touchEdge', () => {
 })
 
 describe('inline simulator config', () => {
-  it('keeps the device and clamps the panel height', () => {
-    expect(normalizeInlineSimulatorConfig({ udid: 'avd:Pixel_9', name: 'Pixel 9', height: 99999 })).toEqual({
-      udid: 'avd:Pixel_9',
-      name: 'Pixel 9',
-      height: INLINE_SIM_HEIGHT.max
-    })
-    expect(normalizeInlineSimulatorConfig({ height: 10 })).toEqual({ height: INLINE_SIM_HEIGHT.min })
+  it('keeps the device, and no size of its own (the run node is the size)', () => {
+    expect(normalizeInlineSimulatorConfig({ udid: 'avd:Pixel_9', name: 'Pixel 9', height: 900 })).toEqual({ udid: 'avd:Pixel_9', name: 'Pixel 9' })
     expect(normalizeInlineSimulatorConfig(null)).toBeUndefined()
   })
 

@@ -91,7 +91,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 export function RunBar({ nodeId, config, autoStart, simulator }: Props) {
   const { api } = useSession()
-  const { updateNodeData, setNodes, getZoom } = useReactFlow()
+  const { updateNodeData, setNodes, getNodes } = useReactFlow()
   const [listing, setListing] = useState<RunEntriesResult | null>(null)
   const [devices, setDevices] = useState<RunDevice[] | null>(null)
   const [devicesError, setDevicesError] = useState<string | null>(null)
@@ -411,26 +411,27 @@ export function RunBar({ nodeId, config, autoStart, simulator }: Props) {
   }, [nodeId, setNodes])
 
   useLayoutEffect(() => {
-    if (showTerminal) return
+    // With a simulator open the NODE's size is the user's: the panel fills it and scales with it.
+    if (showTerminal || simulator) return
     const bar = barRef.current
     if (!bar) return
     fitCompact()
     const ro = new ResizeObserver(() => fitCompact())
     ro.observe(bar)
     return () => ro.disconnect()
-  }, [showTerminal, fitCompact])
+  }, [showTerminal, simulator, fitCompact])
 
   // ── 📱 The simulator, inside this node ─────────────────────────────────────────────────────
   //
-  // The panel sits under the control rows, inside the bar, so the compact fit above sizes the node
-  // around it. 📱 opens it (the run's device preselected when it is a simulator — an iOS UDID, or
-  // an Android emulator's adb serial, which is what Flutter names it — else empty to pick any) and
-  // closes it again; when the simulator was popped out into its own node, 📱 docks it back in.
-  // With the terminal shown, the node's height is not fitted, so it grows / shrinks by the panel.
+  // 📱 opens the simulator under the control rows (the run's device preselected when it is a
+  // simulator — an iOS UDID, or an Android emulator's adb serial, which is what Flutter names it —
+  // else empty to pick any) and closes it again; when it was popped out into its own node, 📱 docks
+  // it back in. While it is open the panel fills the node, so resizing the node scales the screen
+  // (letterboxed, like a Simulator node); the compact fit above stands down. Opening grows the node
+  // by a panel's worth; closing hands it back (the compact fit, or the same amount with the terminal
+  // shown).
 
-  const simHeight = simulator?.height ?? INLINE_SIM_HEIGHT.default
-  const [dragHeight, setDragHeight] = useState<number | null>(null)
-  const panelHeight = dragHeight ?? simHeight
+  const panelRef = useRef<HTMLDivElement>(null)
   const poppedOut = useStore((st) => {
     for (const n of st.nodeLookup.values()) {
       if (n.type === 'simulator' && (n.data.simulator as SimulatorNodeConfig | undefined)?.dockTo === nodeId) return n.id
@@ -438,19 +439,23 @@ export function RunBar({ nodeId, config, autoStart, simulator }: Props) {
     return null
   })
 
-  /** Set or clear the inline simulator, growing the node by the panel when the terminal shows. */
+  /** Show `next` inside this node (or hide it), resizing the node around the change. `extra` adds
+   *  or removes other nodes in the same update (pop out / dock back). */
   const setInline = useCallback(
     (next: InlineSimulatorConfig | undefined, extra?: (ns: CanvasNode[]) => CanvasNode[]) => {
+      const panelNow = panelRef.current?.offsetHeight || INLINE_SIM_HEIGHT
       setNodes((all) => {
         const ns = (extra ? extra(all as CanvasNode[]) : all) as CanvasNode[]
         return ns.map((n) => {
           if (n.id !== nodeId) return n
-          const was = n.data.runSimulator as InlineSimulatorConfig | undefined
+          const was = !!n.data.runSimulator
           const data = { ...n.data, runSimulator: next }
+          if (was === !!next) return { ...n, data }
           const showing = !!(n.data.runConfig as RunNodeConfig | undefined)?.showTerminal
-          if (!showing || !!was === !!next) return { ...n, data }
-          const delta = (next ? next.height ?? INLINE_SIM_HEIGHT.default : -(was?.height ?? INLINE_SIM_HEIGHT.default))
-          const height = Math.max(terminalNodeSize().height, ((n.height as number | undefined) ?? 0) + delta)
+          // Hidden terminal + closing: the compact fit takes the height back by itself.
+          if (!next && !showing) return { ...n, data }
+          const now = (n.height as number | undefined) ?? n.measured?.height ?? 0
+          const height = Math.max(120, now + (next ? INLINE_SIM_HEIGHT : -panelNow))
           return { ...n, height, style: { ...n.style, height }, data }
         })
       })
@@ -458,26 +463,16 @@ export function RunBar({ nodeId, config, autoStart, simulator }: Props) {
     [nodeId, setNodes]
   )
 
+  /** ⇲ / 📱 on a popped-out simulator: its node goes, and its device comes back inside this one. */
   const dockBack = useCallback(
     (simNodeId: string) => {
-      setNodes((all) => {
-        const sim = (all as CanvasNode[]).find((n) => n.id === simNodeId)
-        const cfg = (sim?.data.simulator as SimulatorNodeConfig | undefined) ?? {}
-        const { dockTo: _d, ...device } = cfg
-        void _d
-        return (all as CanvasNode[])
-          .filter((n) => n.id !== simNodeId)
-          .map((n) => {
-            if (n.id !== nodeId) return n
-            const runSimulator: InlineSimulatorConfig = { ...device, height: (n.data.runSimulator as InlineSimulatorConfig | undefined)?.height }
-            const showing = !!(n.data.runConfig as RunNodeConfig | undefined)?.showTerminal
-            if (!showing) return { ...n, data: { ...n.data, runSimulator } }
-            const height = ((n.height as number | undefined) ?? 0) + (runSimulator.height ?? INLINE_SIM_HEIGHT.default)
-            return { ...n, height, style: { ...n.style, height }, data: { ...n.data, runSimulator } }
-          })
-      })
+      const sim = getNodes().find((n) => n.id === simNodeId)
+      if (!sim) return
+      const { dockTo: _d, ...device } = (sim.data.simulator as SimulatorNodeConfig | undefined) ?? {}
+      void _d
+      setInline(device, (ns) => ns.filter((n) => n.id !== simNodeId))
     },
-    [nodeId, setNodes]
+    [getNodes, setInline]
   )
 
   // The popped-out node's ⇲ asks for this.
@@ -506,12 +501,10 @@ export function RunBar({ nodeId, config, autoStart, simulator }: Props) {
   /** ⇱: the panel becomes its own Simulator node beside this one, which can dock back. */
   const popOut = () => {
     if (!simulator) return
-    const { height: _h, ...device } = simulator
-    void _h
     setInline(undefined, (ns) => {
       const src = ns.find((n) => n.id === nodeId)
       if (!src) return ns
-      const node = createSimulatorNode(ns.length, { ...device, dockTo: nodeId })
+      const node = createSimulatorNode(ns.length, { ...simulator, dockTo: nodeId })
       const w = src.measured?.width ?? (src.width as number | undefined) ?? 640
       node.position = { x: src.position.x + w + 40, y: src.position.y }
       return [...ns, src.parentId ? { ...node, parentId: src.parentId, extent: 'parent' as const } : node]
@@ -520,42 +513,10 @@ export function RunBar({ nodeId, config, autoStart, simulator }: Props) {
 
   const onSimConfig = useCallback(
     (next: SimulatorNodeConfig) => {
-      updateNodeData(nodeId, (n) => {
-        const was = n.data.runSimulator as InlineSimulatorConfig | undefined
-        if (!was) return {}
-        return { runSimulator: { ...next, dockTo: undefined, height: was.height } }
-      })
+      updateNodeData(nodeId, (n) => (n.data.runSimulator ? { runSimulator: { ...next, dockTo: undefined } } : {}))
     },
     [nodeId, updateNodeData]
   )
-
-  /** The grip under the panel: drag to set its height (canvas pixels, so the zoom is divided out). */
-  const onGripDown = (e: React.PointerEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-    const startY = e.clientY
-    const from = simHeight
-    const zoom = getZoom() || 1
-    const clamp = (h: number) => Math.round(Math.min(INLINE_SIM_HEIGHT.max, Math.max(INLINE_SIM_HEIGHT.min, h)))
-    const move = (ev: PointerEvent) => setDragHeight(clamp(from + (ev.clientY - startY) / zoom))
-    const up = (ev: PointerEvent) => {
-      window.removeEventListener('pointermove', move)
-      window.removeEventListener('pointerup', up)
-      const h = clamp(from + (ev.clientY - startY) / zoom)
-      setDragHeight(null)
-      setNodes((ns) =>
-        ns.map((n) => {
-          if (n.id !== nodeId || !n.data.runSimulator) return n
-          const data = { ...n.data, runSimulator: { ...(n.data.runSimulator as InlineSimulatorConfig), height: h } }
-          if (!(n.data.runConfig as RunNodeConfig | undefined)?.showTerminal) return { ...n, data }
-          const height = ((n.height as number | undefined) ?? 0) + (h - from)
-          return { ...n, height, style: { ...n.style, height }, data }
-        })
-      )
-    }
-    window.addEventListener('pointermove', move)
-    window.addEventListener('pointerup', up)
-  }
 
   const toggleTerminal = useCallback(() => {
     const next = !showTerminal
@@ -630,7 +591,7 @@ export function RunBar({ nodeId, config, autoStart, simulator }: Props) {
     (entry && !entry.supported ? entry.reason : null)
 
   return (
-    <div ref={barRef} className={`run-bar nodrag nowheel${showTerminal ? '' : ' run-bar--compact'}`}>
+    <div ref={barRef} className={`run-bar nodrag nowheel${showTerminal ? '' : ' run-bar--compact'}${simulator ? ' run-bar--sim' : ''}`}>
       <div className="run-bar__row">
         <select
           className="run-bar__select run-bar__select--folder"
@@ -822,22 +783,20 @@ export function RunBar({ nodeId, config, autoStart, simulator }: Props) {
       )}
 
       {simulator && (
-        <>
+        <div ref={panelRef} className="run-sim-host">
           <SimulatorView
             streamId={`${nodeId}.sim`}
             config={simulator}
             onConfig={onSimConfig}
             label={simulator.name ?? 'Simulator'}
             className="run-sim"
-            style={{ height: panelHeight }}
             barExtras={
               <button className="run-bar__icon" title="Pop out into its own node" aria-label="Pop out" onClick={popOut}>
                 ⇱
               </button>
             }
           />
-          <div className="run-sim__grip" title="Drag to resize the simulator" onPointerDown={onGripDown} />
-        </>
+        </div>
       )}
     </div>
   )

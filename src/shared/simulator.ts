@@ -73,22 +73,18 @@ export interface SimulatorNodeConfig {
 }
 
 /**
- * A simulator shown INSIDE a run node (`data.runSimulator`): present = the panel is open. The same
- * device settings as a Simulator node, plus the panel's height — the run node's width is the
- * user's, so the screen is fitted inside a panel of this height.
+ * A simulator shown INSIDE a run node (`data.runSimulator`): present = shown. The device settings
+ * of a Simulator node; its size is the run node's own (the panel fills it), so none is stored.
  */
-export interface InlineSimulatorConfig extends SimulatorNodeConfig {
-  height?: number
-}
+export type InlineSimulatorConfig = Omit<SimulatorNodeConfig, 'dockTo'>
 
-export const INLINE_SIM_HEIGHT = { min: 240, max: 1600, default: 560 } as const
+/** How much a run node grows when its simulator opens (it can then be resized like any node). */
+export const INLINE_SIM_HEIGHT = 560
 
 export function normalizeInlineSimulatorConfig(raw: unknown): InlineSimulatorConfig | undefined {
   if (!raw || typeof raw !== 'object') return undefined
-  const out: InlineSimulatorConfig = normalizeSimulatorConfig(raw)
-  delete out.dockTo
-  const h = Number((raw as Record<string, unknown>).height)
-  if (Number.isFinite(h)) out.height = Math.round(Math.min(INLINE_SIM_HEIGHT.max, Math.max(INLINE_SIM_HEIGHT.min, h)))
+  const { dockTo: _d, ...out } = normalizeSimulatorConfig(raw)
+  void _d
   return out
 }
 
