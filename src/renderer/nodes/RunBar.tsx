@@ -938,12 +938,17 @@ export function RunBar({ nodeId, config, autoStart, simulator, browser: browserP
       {browserPanel && (
         <div ref={panelRef} className="run-sim-host">
           <div className="run-web">
-            <BrowserSurface nodeId={`${nodeId}.web`} url={browserPanel.url ?? ''} onUrlChange={onBrowserUrl} onTitleChange={() => undefined} />
-            {!browserPanel.url && (
-              <div className="run-web__waiting">
-                {running ? 'Waiting for the run to print its local address… or type one above.' : 'Run it to show its page here — or type an address above.'}
-              </div>
-            )}
+            <BrowserSurface
+              nodeId={`${nodeId}.web`}
+              url={browserPanel.url ?? ''}
+              onUrlChange={onBrowserUrl}
+              onTitleChange={ignoreTitle}
+              blank={
+                <div className="run-web__waiting">
+                  {running ? 'Waiting for the run to print its local address… or type one above.' : 'Run it to show its page here — or type an address above.'}
+                </div>
+              }
+            />
           </div>
         </div>
       )}
@@ -966,6 +971,10 @@ export function RunBar({ nodeId, config, autoStart, simulator, browser: browserP
     </div>
   )
 }
+
+/** The browser panel keeps no title (the run node has its own); stable, so the page's listeners
+ *  are not re-attached on every render. */
+function ignoreTitle(): void {}
 
 function previewButtonTitle(kind: PreviewKind, open: boolean, poppedOut: boolean): string {
   const what = kind === 'browser' ? 'browser' : 'simulator'

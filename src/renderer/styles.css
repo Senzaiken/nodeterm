@@ -3982,8 +3982,11 @@ body,
   overflow: hidden;
 }
 .run-web__waiting {
-  position: absolute;
-  inset: 40px 12px auto;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
   text-align: center;
   font-size: 12px;
   color: var(--muted);
