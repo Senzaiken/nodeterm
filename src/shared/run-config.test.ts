@@ -10,11 +10,13 @@ import {
   describeLaunchFile,
   deviceClaims,
   flavorOf,
+  isVmServiceUrl,
   normalizeRunConfig,
   parseEnvFile,
   parseJsonc,
   parseLaunchFile,
   parseTasksFile,
+  parseVmServiceLog,
   planLaunch,
   planTask,
   resolveEntry,
@@ -435,5 +437,40 @@ describe('switching a running Flutter app without a rebuild', () => {
     // The launch line scrolled off: everything on screen is newer than it.
     expect(attachConnected('…lots of output…\nFlutter run key commands.\n')).toBe(true)
     expect(attachConnected('▶ flutter attach\n')).toBe(false)
+  })
+})
+
+describe('finding a running app on an iOS simulator', () => {
+  // Shape copied from a real `xcrun simctl spawn <udid> log show --style compact` (Flutter 3.47).
+  const LOG = [
+    'Timestamp               Ty Process[PID:TID]',
+    '2026-10-09 11:02:10.100 Df Runner[61000:7a01] (Flutter) flutter: The Dart VM service is listening on http://127.0.0.1:49999/AAAA=/',
+    '2026-10-09 12:24:00.531 Df Runner[64771:740c89a] (Flutter) flutter: The Dart VM service is listening on http://127.0.0.1:50056/OtE7vTN5nVs=/',
+    "2026-10-09 12:32:09.463 Df log[75814:0] [com.apple.log:] log run noninteractively, args: 'log' 'show' '--predicate' 'eventMessage CONTAINS \"Dart VM service is listening\"'"
+  ].join('\n')
+
+  it('reads each announcement with the pid that made it, oldest first, ignoring log show echoing its own predicate', () => {
+    expect(parseVmServiceLog(LOG)).toEqual([
+      { url: 'http://127.0.0.1:49999/AAAA=/', pid: '61000' },
+      { url: 'http://127.0.0.1:50056/OtE7vTN5nVs=/', pid: '64771' }
+    ])
+  })
+
+  it('accepts only loopback VM service URLs', () => {
+    expect(isVmServiceUrl('http://127.0.0.1:50056/OtE7vTN5nVs=/')).toBe(true)
+    expect(isVmServiceUrl('http://evil.example:80/x/')).toBe(false)
+    expect(isVmServiceUrl("http://127.0.0.1:1/'; rm -rf ~")).toBe(false)
+  })
+
+  it('passes the discovered URL to flutter attach, ahead of the config’s own', () => {
+    const r = planLaunch(
+      cfg({ type: 'dart', program: 'lib/main_dev.dart', vmServiceUri: 'http://127.0.0.1:1/old=/' }),
+      ctx({ isFlutterProject: true, deviceId: 'SIM-1' }),
+      { attach: true, debugUrl: 'http://127.0.0.1:50056/OtE7vTN5nVs=/' }
+    )
+    expect(r.ok && r.plan.kind === 'process' && r.plan.argv).toEqual([
+      'flutter', 'attach', '-t', 'lib/main_dev.dart', '--debug-url', 'http://127.0.0.1:50056/OtE7vTN5nVs=/',
+      '-d', 'SIM-1', '--pid-file', '/data/run/n.flutter.pid'
+    ])
   })
 })

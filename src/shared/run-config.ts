@@ -325,6 +325,34 @@ export function pinnedDevice(raw: Record<string, unknown>): string | undefined {
   return isSafeDeviceId(raw.deviceId) ? raw.deviceId : undefined
 }
 
+/** A Dart VM service URL as the engine prints it: loopback http, a port, the auth-code path. */
+export function isVmServiceUrl(s: string): boolean {
+  return /^http:\/\/127\.0\.0\.1:\d{1,5}\/[A-Za-z0-9_=+-]*\/?$/.test(s)
+}
+
+/**
+ * The VM service URLs a Flutter app announced in an iOS simulator's log, newest last, with the pid
+ * of the process that announced each. The engine logs `The Dart VM service is listening on <url>`
+ * at startup; `log show --style compact` prefixes `<process>[<pid>:<tid>]`.
+ *
+ * Needed because `flutter attach` cannot find an ALREADY-running app on the iOS simulator — it
+ * relies on mDNS, which the simulator barely supports. MEASURED (Flutter 3.47, iOS 27.1 sim): attach
+ * printed "The Dart VM Service was not discovered after 30 seconds … use the Dart VM service URL
+ * … with flutter attach --debug-url" and never connected; with the URL from this log line it
+ * connected in 26 s. The URL `flutter run` itself printed is useless here: it is the tool's DDS
+ * proxy, which closes when that tool detaches.
+ */
+export function parseVmServiceLog(text: string): Array<{ url: string; pid: string }> {
+  const out: Array<{ url: string; pid: string }> = []
+  for (const line of text.split('\n')) {
+    if (!line.includes('Dart VM service is listening on')) continue
+    const url = /listening on (http:\/\/127\.0\.0\.1:\d+\/[A-Za-z0-9_=+-]*\/?)/.exec(line)?.[1]
+    const pid = /\[(\d+):/.exec(line)?.[1]
+    if (url && pid && isVmServiceUrl(url)) out.push({ url: url.endsWith('/') ? url : `${url}/`, pid })
+  }
+  return out
+}
+
 /** The `--flavor` in a Flutter argv (`--flavor x` or `--flavor=x`). */
 export function flavorOf(args: readonly string[]): string | undefined {
   for (let i = 0; i < args.length; i++) {
@@ -678,7 +706,11 @@ export function planTask(label: string, ctx: PlanContext, depth = 0, seen = new 
 }
 
 /** Turn one launch configuration into what the host runs. Pure; every refusal is a sentence. */
-export function planLaunch(cfg: LaunchConfig, ctx: PlanContext, opts: { attach?: boolean } = {}): PlanResult {
+export function planLaunch(
+  cfg: LaunchConfig,
+  ctx: PlanContext,
+  opts: { attach?: boolean; debugUrl?: string } = {}
+): PlanResult {
   const entry = describeConfig(cfg, ctx.isFlutterProject)
   if (!entry.supported) return { ok: false, error: entry.reason ?? 'Not supported.' }
   try {
@@ -721,7 +753,8 @@ export function planLaunch(cfg: LaunchConfig, ctx: PlanContext, opts: { attach?:
           if (opts.attach || entry.attach) {
             // `flutter attach` to the app already running on the node's device. Only the arguments
             // attach understands survive (attachArgs); dart-defines do, so constants match.
-            const vm = str(raw.vmServiceUri) ?? str(raw.observatoryUri)
+            // The host's discovered URL wins (an iOS simulator's app cannot be found by mDNS).
+            const vm = (opts.debugUrl && isVmServiceUrl(opts.debugUrl) ? opts.debugUrl : undefined) ?? str(raw.vmServiceUri) ?? str(raw.observatoryUri)
             const attachDevice = entry.pinnedDevice ? ['-d', entry.pinnedDevice] : ctx.deviceId ? ['-d', ctx.deviceId] : []
             return proc(
               [

@@ -1963,7 +1963,16 @@ session.
   flags attach accepts survive, `attachArgs`, MEASURED against `flutter attach --help` — attach has
   no `--flavor`), wait until it prints its key help AFTER its own `▶ flutter attach` line
   (`attachConnected`), then a hot RESTART — never a reload: a freshly attached tool only pushes
-  files changed after it connected. Flutter REFUSES a hand-passed `FLUTTER_APP_FLAVOR`, so after an
+  files changed after it connected (MEASURED live, Flutter 3.47 / iOS 27.1 simulator: a reload
+  after attaching from the other checkout "Reloaded 0 libraries" and the old code kept running; a
+  SIGUSR2 restart swapped it in 2.6 s, same app pid, no rebuild). **On an iOS simulator attach
+  needs `--debug-url`**: it finds an already-running app by mDNS, which the simulator barely
+  supports ("The Dart VM Service was not discovered after 30 seconds"), and the URL `flutter run`
+  printed is its DDS proxy, gone with the detached tool. `simulatorVmServiceUrl` reads the app's
+  own "The Dart VM service is listening on …" line from `simctl spawn <udid> log show` (~3 s) and
+  takes the newest one whose process is still alive (`parseVmServiceLog`); not found ⇒ the switch
+  is refused with Rebuild offered. Some Macs ship no registered `Simulator.app` (`open -a
+  Simulator` fails); booting falls back to the active Xcode's copy and otherwise runs headless. Flutter REFUSES a hand-passed `FLUTTER_APP_FLAVOR`, so after an
   attach `appFlavor` is the pubspec default; an app whose `lib/` reads `appFlavor` is refused the
   switch with that reason. Dart `"request": "attach"` configurations run as `flutter attach` too;
   every other attach is still refused. No "bring simulator forward":
