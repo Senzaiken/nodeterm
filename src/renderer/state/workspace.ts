@@ -38,7 +38,8 @@ import { isSafeNodeId } from '@shared/safe-id'
 import { openerByTarget, recordedOpenerOf } from '../lib/teamProgress'
 import { normalizePendingLaunch } from '@shared/pending-launch-shape'
 import { normalizeTerminalFontSize } from '../terminal/terminal-font-zoom'
-import { normalizeRunConfig, runNodeTitle, type RunNodeConfig } from '@shared/run-config'
+import { RUN_NODE_ID, normalizeRunConfig, runNodeTitle, type RunNodeConfig } from '@shared/run-config'
+import { normalizeRunBrowserConfig } from '@shared/run-preview'
 import { normalizeInlineSimulatorConfig, normalizeSimulatorConfig, type SimulatorNodeConfig } from '@shared/simulator'
 import { useSettings } from './settings'
 
@@ -182,6 +183,10 @@ export interface NodeData {
    * through persistence untouched on Server Edition / mobile, where a browser node has no <webview>.
    */
   partition?: string
+  /** browser-only: popped out of a run node's browser panel — that run node's id, to dock back. */
+  dockTo?: string
+  /** Run nodes only: the browser panel inside the node (present = shown). See @shared/run-preview. */
+  runBrowser?: import('@shared/run-preview').RunBrowserConfig
   /**
    * browser/web-only, NEVER persisted: this node object is a background KEEP-ALIVE GHOST — a
    * `display:none` stand-in merged into the `<ReactFlow>` prop so the `<webview>` of a project the
@@ -2655,6 +2660,8 @@ export function nodeStatesToFlow(states: CanvasNodeState[]): CanvasNode[] {
         fileMissing: n.fileMissing,
         url: n.url,
         partition: n.partition,
+        dockTo: n.kind === 'browser' && typeof n.dockTo === 'string' && RUN_NODE_ID.test(n.dockTo) ? n.dockTo : undefined,
+        runBrowser: n.runConfig ? normalizeRunBrowserConfig(n.runBrowser) : undefined,
         diffStaged: n.diffStaged,
         commitOid: n.commitOid,
         highScore: n.highScore,
@@ -2750,6 +2757,8 @@ export function flowToNodeStates(nodes: CanvasNode[], retainInitialCommand = tru
         fileMissing: n.data.fileMissing,
         url: n.data.url,
         partition: n.data.partition,
+        dockTo: kind === 'browser' && typeof n.data.dockTo === 'string' && RUN_NODE_ID.test(n.data.dockTo) ? n.data.dockTo : undefined,
+        runBrowser: n.data.runConfig ? normalizeRunBrowserConfig(n.data.runBrowser) : undefined,
         diffStaged: n.data.diffStaged,
         commitOid: n.data.commitOid,
         highScore: n.data.highScore,

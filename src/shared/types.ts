@@ -598,6 +598,10 @@ export interface CanvasNodeState {
    * through untouched on Server Edition / mobile, where a browser node renders with no <webview>.
    */
   partition?: string
+  /** browser-only: popped out of a run node's browser panel — that run node's id. */
+  dockTo?: string
+  /** Run nodes: the browser panel inside the node. Read through `normalizeRunBrowserConfig`. */
+  runBrowser?: import('./run-preview').RunBrowserConfig
   /** diff-only: true = staged diff (HEAD vs index), false = unstaged (index vs working). */
   diffStaged?: boolean
   /** diff-only: when set, the diff shows parent (<oid>^) vs commit (<oid>) for a file from history. */

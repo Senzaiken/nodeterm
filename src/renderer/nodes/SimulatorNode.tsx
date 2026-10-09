@@ -93,7 +93,7 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
               className="run-bar__icon nodrag"
               title="Dock back into its run node"
               aria-label="Dock into run node"
-              onClick={() => window.dispatchEvent(new CustomEvent('nodeterm:dock-simulator', { detail: { simulatorNodeId: id, runNodeId: dockTo } }))}
+              onClick={() => window.dispatchEvent(new CustomEvent('nodeterm:dock-preview', { detail: { nodeId: id, runNodeId: dockTo } }))}
             >
               ⇲
             </button>
