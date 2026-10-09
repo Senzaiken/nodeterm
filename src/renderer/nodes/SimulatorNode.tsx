@@ -5,6 +5,8 @@ import {
   ORIENTATION_PURPLE,
   displayLabel,
   displayToFramebuffer,
+  draggedSide,
+  fitNodeToScreen,
   hidUsageForCode,
   rotateOrientation,
   pointerToScreenRatio,
@@ -37,7 +39,7 @@ const WHEEL_SCALE = 0.25
 
 export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
   const { api } = useSession()
-  const { updateNodeData, deleteElements } = useReactFlow()
+  const { updateNodeData, deleteElements, setNodes } = useReactFlow()
   const config = (data.simulator as SimulatorNodeConfig | undefined) ?? {}
   const udid = config.udid
   const orientation: SimulatorOrientation = config.orientation ?? 'portrait'
@@ -58,6 +60,7 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
   const [booting, setBooting] = useState(false)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const screenRef = useRef<HTMLDivElement>(null)
+  const rootRef = useRef<HTMLDivElement>(null)
 
   const sim = simulators(devices)
   const device = sim.find((d) => d.id === udid)
@@ -176,6 +179,52 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
       void api.simulator.stop(id)
     }
   }, [api, id, udid, booted, paint])
+
+  // ── Fit the node to the screen ───────────────────────────────────────────────────────────────
+  //
+  // No black bars: whenever the screen's shape changes (first frame, a rotation, a foldable moving
+  // to its other screen) the node is resized so the screen area has exactly that shape. The longer
+  // side of the screen keeps its length, so a rotation turns a tall phone into a wide one of the
+  // same size rather than shrinking it into the old box. The header and toolbar are measured, not
+  // assumed (the toolbar wraps on a narrow node), so a second pass a frame later settles any wrap.
+  // Layout pixels (offsetWidth/Height), which the canvas zoom does not touch — the same units as
+  // the node's own size.
+  const fitToScreen = useCallback(
+    (by: 'long' | 'width' | 'height' = 'long') => {
+      const root = rootRef.current
+      const screen = screenRef.current
+      if (!root || !screen || !frameSize || screen.offsetWidth <= 0 || screen.offsetHeight <= 0) return
+      const { width, height } = fitNodeToScreen({
+        screenW: screen.offsetWidth,
+        screenH: screen.offsetHeight,
+        chromeW: root.offsetWidth - screen.offsetWidth,
+        chromeH: root.offsetHeight - screen.offsetHeight,
+        aspect: frameSize.w / frameSize.h,
+        by,
+        minW: NODE_MIN_SIZES.simulator.width,
+        minH: NODE_MIN_SIZES.simulator.height
+      })
+      setNodes((ns) =>
+        ns.map((n) =>
+          n.id !== id || (n.width === width && n.height === height)
+            ? n
+            : { ...n, width, height, style: { ...n.style, width, height } }
+        )
+      )
+    },
+    [frameSize, id, setNodes]
+  )
+  /** The screen area's size when a hand resize began, to tell which side was dragged. */
+  const resizeFrom = useRef<{ w: number; h: number } | null>(null)
+
+  useEffect(() => {
+    if (!frameSize) return
+    fitToScreen()
+    const raf = requestAnimationFrame(() => fitToScreen())
+    return () => cancelAnimationFrame(raf)
+    // Only when the screen's SHAPE changes — not on every frame.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [frameSize?.w, frameSize?.h])
 
   // ── Input ────────────────────────────────────────────────────────────────────────────────────
   // Touches are measured on the (turned) picture and sent in portrait framebuffer coordinates.
@@ -328,7 +377,7 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
 
   return (
     <>
-      <div className={`sim-node${selected ? ' selected' : ''}`}>
+      <div ref={rootRef} className={`sim-node${selected ? ' selected' : ''}`}>
         <div className="sim-node__header" style={{ background: `${data.color}22` }}>
           <span className="sim-node__title" title={data.title as string}>
             {data.title as string}
@@ -419,7 +468,26 @@ export function SimulatorNode({ id, data, selected }: NodeProps<CanvasNode>) {
           {phase === 'live' && message && <div className="sim-node__note">{message}</div>}
         </div>
       </div>
-      <NodeResizer minWidth={NODE_MIN_SIZES.simulator.width} minHeight={NODE_MIN_SIZES.simulator.height} isVisible={selected} color={data.color as string} />
+      <NodeResizer
+        minWidth={NODE_MIN_SIZES.simulator.width}
+        minHeight={NODE_MIN_SIZES.simulator.height}
+        isVisible={selected}
+        color={data.color as string}
+        // A hand resize snaps to the screen's shape when it ends, following the side that was
+        // dragged — widen it and the height follows; make it taller and the width follows.
+        onResizeStart={() => {
+          const sc = screenRef.current
+          resizeFrom.current = sc ? { w: sc.offsetWidth, h: sc.offsetHeight } : null
+        }}
+        onResizeEnd={() =>
+          requestAnimationFrame(() => {
+            const sc = screenRef.current
+            const from = resizeFrom.current
+            resizeFrom.current = null
+            fitToScreen(sc && from ? draggedSide(from, { w: sc.offsetWidth, h: sc.offsetHeight }) : 'long')
+          })
+        }
+      />
     </>
   )
 }

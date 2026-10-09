@@ -4,6 +4,8 @@ import {
   ORIENTATION_PURPLE,
   displayLabel,
   displayToFramebuffer,
+  draggedSide,
+  fitNodeToScreen,
   hidUsageForCode,
   rotateOrientation,
   type SimulatorOrientation,
@@ -125,5 +127,44 @@ describe('orientation', () => {
     expect(normalizeSimulatorConfig({ udid: UDID, orientation: 'sideways' })).toEqual({ udid: UDID })
     expect(normalizeSimulatorInput({ t: 'orientation', value: 3 })).toEqual({ t: 'orientation', value: 3 })
     expect(normalizeSimulatorInput({ t: 'orientation', value: 7 })).toBeNull()
+  })
+})
+
+describe('fitNodeToScreen', () => {
+  // An iPhone 17 framebuffer is 1206×2622 (aspect ≈ 0.46); chrome = 2 px border, 70 px header + toolbar.
+  const phone = 1206 / 2622
+  const base = { chromeW: 2, chromeH: 70, minW: 200, minH: 260 }
+
+  it('fits the first frame by the longer side: a default 360×760 node becomes a phone with no bars', () => {
+    const r = fitNodeToScreen({ ...base, screenW: 358, screenH: 690, aspect: phone, by: 'long' })
+    const screenW = r.width - base.chromeW
+    const screenH = r.height - base.chromeH
+    expect(Math.abs(screenH - 690)).toBeLessThanOrEqual(1) // width is rounded first; height follows it
+    expect(Math.abs(screenW / screenH - phone)).toBeLessThan(0.01)
+  })
+
+  it('turns a tall phone into a wide one of the same size on rotation', () => {
+    const r = fitNodeToScreen({ ...base, screenW: 317, screenH: 690, aspect: 1 / phone, by: 'long' })
+    expect(r.width - base.chromeW).toBe(690)
+    expect(Math.abs((r.width - base.chromeW) / (r.height - base.chromeH) - 1 / phone)).toBeLessThan(0.01)
+  })
+
+  it('follows the side that was dragged', () => {
+    const wider = fitNodeToScreen({ ...base, screenW: 500, screenH: 690, aspect: phone, by: 'width' })
+    expect(wider.width - base.chromeW).toBe(500)
+    expect(wider.height - base.chromeH).toBe(Math.round(500 / phone))
+    const taller = fitNodeToScreen({ ...base, screenW: 317, screenH: 900, aspect: phone, by: 'height' })
+    expect(taller.height - base.chromeH).toBeCloseTo(900, -1)
+  })
+
+  it('keeps the screen’s shape when the minimum width clamps', () => {
+    const r = fitNodeToScreen({ ...base, screenW: 50, screenH: 100, aspect: phone, by: 'long' })
+    expect(r.width).toBe(200)
+    expect(Math.abs((r.width - base.chromeW) / (r.height - base.chromeH) - phone)).toBeLessThan(0.01)
+  })
+
+  it('tells which side a hand resize was about', () => {
+    expect(draggedSide({ w: 300, h: 600 }, { w: 450, h: 610 })).toBe('width')
+    expect(draggedSide({ w: 300, h: 600 }, { w: 305, h: 800 })).toBe('height')
   })
 })

@@ -229,3 +229,44 @@ export function displayLabel(d: SimulatorDisplayInfo, all: readonly SimulatorDis
   const largest = all.reduce((a, b) => (a.width * a.height >= b.width * b.height ? a : b))
   return d.index === largest.index ? 'Inner' : 'Cover'
 }
+
+// ── Fitting the node to the screen ─────────────────────────────────────────────────────────────
+
+export interface FitInput {
+  /** The screen area's current size (layout px) and the node's chrome around it. */
+  screenW: number
+  screenH: number
+  chromeW: number
+  chromeH: number
+  /** The picture's width / height, as shown (after rotation). */
+  aspect: number
+  /** Which side keeps its length: the longer one (a shape change — rotation, first frame), or the
+   *  side the user just dragged (a hand resize). */
+  by: 'long' | 'width' | 'height'
+  minW: number
+  minH: number
+}
+
+/** The node size whose screen area has exactly the picture's shape — no letterbox bars. */
+export function fitNodeToScreen(f: FitInput): { width: number; height: number } {
+  const long = Math.max(f.screenW, f.screenH)
+  const screenW =
+    f.by === 'width'
+      ? f.screenW
+      : f.by === 'height'
+        ? f.screenH * f.aspect
+        : f.aspect >= 1
+          ? long
+          : long * f.aspect
+  const width = Math.max(f.minW, Math.round(screenW + f.chromeW))
+  // A width clamped up to the minimum still gets a screen of the right shape.
+  const height = Math.max(f.minH, Math.round((width - f.chromeW) / f.aspect + f.chromeH))
+  return { width, height }
+}
+
+/** Which side a hand resize was about: the one that changed more, relative to where it started. */
+export function draggedSide(before: { w: number; h: number }, after: { w: number; h: number }): 'width' | 'height' {
+  const dw = Math.abs(after.w - before.w) / Math.max(1, before.w)
+  const dh = Math.abs(after.h - before.h) / Math.max(1, before.h)
+  return dw >= dh ? 'width' : 'height'
+}
