@@ -11,6 +11,12 @@ import { fakePlatform } from '../platform-fake'
 import { hookServer } from './hook-server'
 import { nodeAuthToken } from './node-auth-token'
 import { REQUEST_ID_HINT_LEAD, REQUEST_ID_REPLAYED_LEAD } from '../control-request-ledger'
+import { NODE_IDENTITY_STRICT_AFTER } from './node-identity-policy'
+
+// Several cases send UNVERIFIED callers and need them to execute, which the identity policy allows
+// only inside its warning window. Pin the clock there: reading the real clock made this suite start
+// failing on the cutoff date itself (2026-10-13), with no code change.
+const IN_WINDOW = new Date(NODE_IDENTITY_STRICT_AFTER.getTime() - 24 * 60 * 60 * 1000)
 
 const secret = Buffer.alloc(32, 7)
 let dir: string
@@ -32,6 +38,7 @@ beforeAll(async () => {
   initPlatform(fakePlatform({ userDataDir: dir }))
   await hookServer.start()
   hookServer.setNodeAuthSecret(secret)
+  hookServer.setIdentityClockForTests(() => IN_WINDOW)
   hookServer.setControlHandler(async (cmd) => {
     handled.push({ verb: cmd.verb, nodeId: cmd.nodeId, args: cmd.args, verified: cmd.verified })
     lateOffered.push(typeof cmd.onLateAnswer === 'function')
@@ -46,6 +53,7 @@ beforeEach(() => {
 })
 afterAll(() => {
   hookServer.setIdentityStrictOverride(() => undefined)
+  hookServer.setIdentityClockForTests(() => new Date())
   hookServer.clearNodeAuthSecretForTests()
   hookServer.stop()
   resetPlatformForTests()

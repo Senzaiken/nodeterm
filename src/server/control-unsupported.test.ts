@@ -14,7 +14,7 @@ import { initPlatform, resetPlatformForTests } from '../core/platform'
 import { fakePlatform } from '../core/platform-fake'
 import { hookServer, MESSAGING_CONTROL_REFUSAL } from '../core/agents/hook-server'
 import { nodeAuthToken } from '../core/agents/node-auth-token'
-import { STRICT_CONTROL_REFUSAL } from '../core/agents/node-identity-policy'
+import { NODE_IDENTITY_STRICT_AFTER, STRICT_CONTROL_REFUSAL } from '../core/agents/node-identity-policy'
 import {
   BROWSER_UNSUPPORTED_CLAUSE,
   CONTROL_UNSUPPORTED_ERROR,
@@ -25,6 +25,9 @@ import {
 } from './control-unsupported'
 
 const SECRET = Buffer.alloc(32, 7)
+// The unverified cases below measure the warning-window answer, so the clock is pinned inside the
+// window: reading the real clock made them fail on the cutoff date itself (2026-10-13).
+const IN_WINDOW = new Date(NODE_IDENTITY_STRICT_AFTER.getTime() - 24 * 60 * 60 * 1000)
 let dir = ''
 
 function control(verb: string, nodeId: string, accept = 'text/plain', token?: string) {
@@ -47,11 +50,13 @@ beforeAll(async () => {
   initPlatform(fakePlatform({ userDataDir: dir }))
   await hookServer.start()
   hookServer.setNodeAuthSecret(SECRET)
+  hookServer.setIdentityClockForTests(() => IN_WINDOW)
   // The exact registration `src/server/index.ts` performs after `hookServer.start()`.
   hookServer.setControlHandler(serverEditionControlHandler)
 })
 
 afterAll(() => {
+  hookServer.setIdentityClockForTests(() => new Date())
   hookServer.clearNodeAuthSecretForTests()
   hookServer.stop()
   resetPlatformForTests()
