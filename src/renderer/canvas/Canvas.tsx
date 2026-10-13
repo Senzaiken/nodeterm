@@ -17787,7 +17787,7 @@ export function Canvas() {
         const probe = { reqId: req.id, project: undefined }
         linkProbeRef.current = probe
         setLinkProbe(probe)
-        void window.nodeTerminal.workspace
+        void api.workspace
           .probeFolder(folder)
           .catch(() => null)
           .then((project) => {
@@ -17823,7 +17823,7 @@ export function Canvas() {
       unPair()
       unNotice()
     }
-  }, [connectOffer])
+  }, [connectOffer, api])
 
   const recentActionFor = useCallback(
     (conv: RecentConversation): { label: string; disabled?: string } => {
