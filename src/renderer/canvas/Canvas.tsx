@@ -552,9 +552,14 @@ import {
   AGENT_CONFIG,
   BUILTIN_AGENT_IDS,
   resolvePermissionMode,
+  hasPermissionMode,
+  PERMISSION_MODE_LABELS,
   type AgentId,
   type AgentPermissionMode
 } from '@shared/agents/config'
+import { comparablePath, type OpenLinkAcceptResult, type OpenLinkChoice, type OpenLinkPrompt } from '@shared/open-link'
+import { OpenLinkSheet } from '../components/OpenLinkSheet'
+import { NEW_PROJECT_KEY, nextSheetAction, type LinkPermissionView } from '../lib/openLinkSheet'
 import { withPermissionMode } from '@shared/agents/approval-mode'
 import { promptFilePathError } from '@shared/agents/launch'
 import { encodeUtf8Base64, launchPromptFor } from '../lib/promptSpill'
@@ -991,6 +996,10 @@ interface HostedMountOpts {
 
 /** What the agent-control handler's `reply` accepts, for helpers that build one outside it. */
 type ControlReply = { ok: boolean; message?: string; result?: unknown; error?: string }
+/** An accepted `nodeterm://open` link, as main answered it (prompt possibly spilled to a file). */
+type LinkOpen = Extract<OpenLinkAcceptResult, { ok: true }>['open']
+/** An accepted link waiting for its project to load is dropped after this (see pendingLinkRef). */
+const PENDING_LINK_MAX_MS = 30_000
 
 /** The confirm dialogs, named so their setters can be wrapped in a synchronous open-guard (see
  *  `confirmFlags`): ONE confirm at a time, decided at call time rather than at the next render. */
@@ -1710,6 +1719,11 @@ export function Canvas() {
   const pendingFocusRef = useRef<string | null>(null)
   // "Open recent": a conversation to resume once the project it belongs to is on the canvas.
   const pendingResumeRef = useRef<{ projectId: string; conv: RecentConversation } | null>(null)
+  // A `nodeterm://open` link the human accepted: the node to create once its project is on the canvas.
+  // `at`: a link that has not landed within PENDING_LINK_MAX_MS is dropped, never created later
+  // out of context (e.g. on the next load of that project, hours on).
+  const pendingLinkRef = useRef<{ projectId: string; open: LinkOpen; at: number } | null>(null)
+  const linkCreateRef = useRef<(open: LinkOpen) => void>(() => {})
   // One-shot: the next active-project load keeps the CURRENT camera instead of applying the
   // project's saved viewport. Set by reloadActiveProject (in-place external-change reload).
   const preserveViewportRef = useRef(false)
@@ -3372,6 +3386,12 @@ export function Canvas() {
       if (pendingResume && pendingResume.projectId === project.id) {
         pendingResumeRef.current = null
         resumeCreateRef.current(pendingResume.conv)
+      }
+      // Finish a `nodeterm://open` link that had to land on this project first.
+      const pendingLink = pendingLinkRef.current
+      if (pendingLink && pendingLink.projectId === project.id) {
+        pendingLinkRef.current = null
+        if (Date.now() - pendingLink.at < PENDING_LINK_MAX_MS) linkCreateRef.current(pendingLink.open)
       }
       // Consume a cross-project focus request (notification click on a background node).
       const pending = pendingFocusRef.current
@@ -5336,7 +5356,9 @@ export function Canvas() {
       initialCommand?: string,
       groupId?: string,
       /** Force the working directory (e.g. a Source Control action running in a worktree scope). */
-      cwdOverride?: string
+      cwdOverride?: string,
+      /** A title for the node (a `nodeterm://open` link's `title`). */
+      title?: string
     ) => {
       // Live read + epoch guard: same rule as addAgentNode (issue #443) — a menu closure built
       // under the previous project must not root a terminal in that project's folder.
@@ -5367,7 +5389,8 @@ export function Canvas() {
       // passing `project?.ssh` straight through.
       const ssh = nodeSshFor(project?.ssh, cwdOverride)
       setNodes((ns) => {
-        const node = createTerminalNode(ns.length, cwd, center ?? emptyNodePos(), initialCommand, ssh)
+        const made = createTerminalNode(ns.length, cwd, center ?? emptyNodePos(), initialCommand, ssh)
+        const node = title ? { ...made, data: { ...made.data, title } } : made
         return [...ns, groupId ? parentInto(node, groupId) : node]
       })
       markDirty()
@@ -6444,7 +6467,15 @@ export function Canvas() {
       // `awaitSetupGroup` holds the launch for that worktree frame's setup script (the issue card's
       // "Start with agent in a new worktree" opens the agent in the same tick as the frame) — the
       // same `PendingLaunch` hold a control open into a preparing frame gets (`setupHoldGroup`).
-      extra?: { issueRef?: IssueRef; awaitSetupGroup?: string }
+      extra?: {
+        issueRef?: IssueRef
+        awaitSetupGroup?: string
+        // A `nodeterm://open` link (main/open-link.ts), every value already checked by main: the
+        // folder the node runs in, its title, and a first prompt stored as a file (`--prompt-file`).
+        cwd?: string
+        title?: string
+        promptFile?: string
+      }
     ): { node: CanvasNode; placed: CanvasNode; projectId: string } | undefined => {
       // Resolve the target project LIVE, at click time — never from this callback's render
       // closure. Menu onClick closures outlive the render that built them (`setMenu` freezes
@@ -6461,7 +6492,7 @@ export function Canvas() {
         return
       }
       const project = useProjects.getState().getProject(targetProjectId)
-      const cwd = cwdForNewNodeIn(groupId) ?? project?.cwd
+      const cwd = extra?.cwd ?? cwdForNewNodeIn(groupId) ?? project?.cwd
       // Codex accounts (S6) resolve through their OWN fail-closed gate: an explicitly picked account
       // that is missing/hostile/unconnected is REFUSED here rather than silently downgraded to the
       // system login (Property 4). Claude keeps its project-default-aware resolver. The factory
@@ -6523,10 +6554,14 @@ export function Canvas() {
         // Same funnel as the account above: the active project owns the node, so its own
         // `.nodeterm/settings.json` launch command layers over the global one.
         targetProjectId,
-        model
+        model,
+        extra?.promptFile
       )
       const issueRef = normalizeIssueRef(extra?.issueRef)
-      const bound = issueRef ? { ...created, data: { ...created.data, issueRef } } : created
+      const titled = extra?.title
+        ? { ...created, data: { ...created.data, title: extra.title, titleAuto: false } }
+        : created
+      const bound = issueRef ? { ...titled, data: { ...titled.data, issueRef } } : titled
       const node = extra?.awaitSetupGroup ? queueControlLaunch(bound, [], extra.awaitSetupGroup) : bound
       // Parented HERE, not inside the updater: the updater runs at render time, and a render that
       // a zustand write flushes first (SyncLane, skipping this DefaultLane update) mirrors
@@ -17588,6 +17623,208 @@ export function Canvas() {
     [resumeContext, travelToNode, resumeWhenLanded, reopenProject, switchProject, openOrAdoptFolder]
   )
 
+  // ── `nodeterm://` links (main/open-link.ts, components/OpenLinkSheet.tsx) ──────────────────────
+  // Main validates a link and asks; the sheet shows exactly what will open and where; main re-checks
+  // the human's choice and answers with the final open, which is created here like any new node.
+  const [linkSheet, setLinkSheet] = useState<{ req: OpenLinkPrompt; touched: boolean; shownAt: number } | null>(null)
+  const linkSheetRef = useRef(linkSheet)
+  linkSheetRef.current = linkSheet
+  // "Open <folder> as a new project" ADOPTS that folder's committed .nodeterm/project.json, whose
+  // permission mode then applies. The sheet must show that mode, so the folder is probed when the
+  // sheet appears; `project: undefined` = still reading.
+  // The ref is the value (callbacks read it); the state only re-renders the sheet when it lands.
+  const linkProbeRef = useRef<{ reqId: string; project: Project | null | undefined } | null>(null)
+  const [, setLinkProbe] = useState(linkProbeRef.current)
+
+  /** Create the accepted node on the canvas on screen (which is the link's project by now). */
+  const createFromLink = useCallback(
+    (open: LinkOpen): void => {
+      const center = viewCenter()
+      if (open.agent === 'terminal') {
+        addTerminal(center, undefined, undefined, open.cwd, open.title)
+        return
+      }
+      const made = addAgentNode(open.agent, center, undefined, undefined, open.prompt, {
+        ...(open.cwd ? { cwd: open.cwd } : {}),
+        ...(open.title ? { title: open.title } : {}),
+        ...(open.promptFile ? { promptFile: open.promptFile } : {})
+      })
+      if (made) goToNode(made.placed)
+    },
+    [viewCenter, addTerminal, addAgentNode, goToNode]
+  )
+  useEffect(() => {
+    linkCreateRef.current = createFromLink
+  })
+
+  const runLinkOpen = useCallback(
+    async (accepted: Extract<OpenLinkAcceptResult, { ok: true }>['open'], shownMode?: string): Promise<void> => {
+      // A long inline prompt goes to a file the pane's shell reads (#706) — decided BEFORE landing,
+      // so no await sits between "this project is on screen" and the node's creation.
+      let open: LinkOpen = accepted
+      if (accepted.prompt && accepted.agent !== 'terminal') {
+        const p = await launchPromptFor(
+          { prompt: accepted.prompt, localFs: true },
+          { saveUpload: (name, data) => api.files.saveUpload(name, data), encodeBase64: encodeUtf8Base64 }
+        )
+        open = { ...accepted, prompt: p.prompt, promptFile: p.promptFile ?? accepted.promptFile }
+      }
+      setWelcomeOpen(false)
+      let projectId = accepted.projectId
+      if (accepted.newProjectCwd) {
+        const folder = comparablePath(accepted.newProjectCwd)
+        await openOrAdoptFolder(accepted.newProjectCwd)
+        projectId = useProjects
+          .getState()
+          .projects.find((p) => !p.ssh && !p.remote && p.cwd && comparablePath(p.cwd) === folder)?.id
+      }
+      const project = projectId ? useProjects.getState().getProject(projectId) : undefined
+      if (!projectId || !project) {
+        setNotice({ kind: 'error', text: 'Could not open the link: its project is no longer available.' })
+        return
+      }
+      // The sheet showed a permission mode; the session must start in that one. A project file that
+      // changed in between (a pull, an adopted folder that differs from the probe) refuses.
+      if (shownMode !== undefined && accepted.agent !== 'terminal' && hasPermissionMode(accepted.agent)) {
+        const now = PERMISSION_MODE_LABELS[projectPermissionMode(project, accepted.agent)]
+        if (now !== shownMode) {
+          setNotice({
+            kind: 'error',
+            text: `Did not open the link: the project's permission mode is now "${now}", not the "${shownMode}" the sheet showed. Click the link again.`
+          })
+          return
+        }
+      }
+      if (projectId === useProjects.getState().activeProjectId && canCreateOnCanvas(nodesProjectIdRef.current, projectId)) {
+        createFromLink(open)
+        return
+      }
+      pendingLinkRef.current = { projectId, open, at: Date.now() }
+      if (project.closed) {
+        const ok = await reopenProject(projectId)
+        if (!ok && pendingLinkRef.current?.open === open) pendingLinkRef.current = null
+      } else switchProject(projectId)
+    },
+    [api, openOrAdoptFolder, createFromLink, reopenProject, switchProject]
+  )
+
+  const linkPermissionLabel = useCallback(
+    (key: string | null): LinkPermissionView | null => {
+      const req = linkSheetRef.current?.req
+      const agent = req?.agent
+      if (!req || !agent || agent === 'terminal' || !hasPermissionMode(agent)) return null
+      let project: Project | undefined
+      if (key === NEW_PROJECT_KEY) {
+        const probe = linkProbeRef.current
+        if (!probe || probe.reqId !== req.id || probe.project === undefined) {
+          return { label: 'Checking the folder…', bypass: false, pending: true }
+        }
+        project = probe.project ?? undefined
+      } else if (key) {
+        project = useProjects.getState().getProject(key)
+      }
+      const mode = projectPermissionMode(project, agent)
+      return { label: PERMISSION_MODE_LABELS[mode], bypass: mode === 'bypassPermissions' }
+    },
+    []
+  )
+  const acceptLink = useCallback(
+    async (choice: OpenLinkChoice): Promise<string | null> => {
+      const cur = linkSheetRef.current
+      if (!cur) return null
+      const shown = linkPermissionLabel(choice.newProject ? NEW_PROJECT_KEY : (choice.projectId ?? null))
+      if (shown?.pending) return 'Still reading the folder — try again in a moment.'
+      let res: OpenLinkAcceptResult
+      try {
+        res = await window.nodeTerminal.openLink.accept(cur.req.id, choice)
+      } catch (err) {
+        return `Could not open: ${stripIpcPrefix(err instanceof Error ? err.message : String(err))}`
+      }
+      // Main forgets a request on its first answer, so a refusal closes the sheet too.
+      setLinkSheet(null)
+      if (!res.ok) {
+        setNotice({ kind: 'error', text: `Could not open the link: ${res.reason}` })
+        return null
+      }
+      void runLinkOpen(res.open, shown?.label).catch((err: unknown) =>
+        setNotice({ kind: 'error', text: `Could not open the link: ${err instanceof Error ? err.message : String(err)}` })
+      )
+      return null
+    },
+    [runLinkOpen, linkPermissionLabel]
+  )
+
+  const cancelLink = useCallback(() => {
+    const cur = linkSheetRef.current
+    if (cur) window.nodeTerminal.openLink.cancel(cur.req.id)
+    setLinkSheet(null)
+  }, [])
+
+  const linkAccountLabel = useCallback((key: string | null): string | null => {
+    if (linkSheetRef.current?.req.agent !== 'claude') return null
+    const project = key && key !== NEW_PROJECT_KEY ? useProjects.getState().getProject(key) : undefined
+    const accounts = useSettings.getState().settings.claudeAccounts ?? []
+    const id = resolveNewNodeAccount(undefined, project, accounts)
+    return id ? (accounts.find((a) => a.id === id)?.label ?? null) : null
+  }, [])
+
+  useEffect(() => {
+    const ol = window.nodeTerminal.openLink
+    const unRequest = ol.onRequest((req) => {
+      const cur = linkSheetRef.current
+      const action = nextSheetAction(cur, Date.now())
+      if (action === 'drop') {
+        ol.cancel(req.id)
+        setNotice({ kind: 'info', text: 'Another nodeterm link arrived while one is open — it was ignored.' })
+        return
+      }
+      if (action === 'replace' && cur) ol.cancel(cur.req.id)
+      const sheet = { req, touched: false, shownAt: Date.now() }
+      linkSheetRef.current = sheet
+      setLinkSheet(sheet)
+      const folder = req.resolution.newProjectCwd
+      if (folder) {
+        const probe = { reqId: req.id, project: undefined }
+        linkProbeRef.current = probe
+        setLinkProbe(probe)
+        void window.nodeTerminal.workspace
+          .probeFolder(folder)
+          .catch(() => null)
+          .then((project) => {
+            if (linkProbeRef.current?.reqId !== req.id) return
+            const done = { reqId: req.id, project }
+            linkProbeRef.current = done
+            setLinkProbe(done)
+          })
+      }
+    })
+    // Pair / join links go to the existing flows, which have their own approval (the SAS compare).
+    // Pre-filled, never auto-accepted: the human presses OK first.
+    const unPair = ol.onPair(({ kind, url }) => {
+      void (async () => {
+        const code = (
+          await promptDialog({
+            message:
+              kind === 'join'
+                ? 'A link asks to join a hosted team. Check the code, then connect:'
+                : "A link carries a host's pairing code. Check it, then connect:",
+            initialValue: url,
+            confirmLabel: 'Connect'
+          })
+        )?.trim()
+        if (code) void connectOffer(code)
+      })()
+    })
+    const unNotice = ol.onNotice(({ text }) => setNotice({ kind: 'error', text }))
+    // Listening: main delivers anything that arrived first (a link that launched the app).
+    ol.ready()
+    return () => {
+      unRequest()
+      unPair()
+      unNotice()
+    }
+  }, [connectOffer])
+
   const recentActionFor = useCallback(
     (conv: RecentConversation): { label: string; disabled?: string } => {
       const plan = planResume(conv, resumeContext())
@@ -19032,6 +19269,22 @@ export function Canvas() {
       )}
 
       {remoteDialogOpen && <RemoteAccessDialog onClose={() => setRemoteDialogOpen(false)} />}
+      {linkSheet && (
+        <OpenLinkSheet
+          key={linkSheet.req.id}
+          request={linkSheet.req}
+          activeProjectId={activeProjectId}
+          permissionLabel={linkPermissionLabel}
+          accountLabel={linkAccountLabel}
+          onTouched={() => {
+            if (linkSheetRef.current && !linkSheetRef.current.touched) {
+              setLinkSheet({ ...linkSheetRef.current, touched: true })
+            }
+          }}
+          onOpen={acceptLink}
+          onCancel={cancelLink}
+        />
+      )}
 
       {shareProjectId && (
         <ShareTeamDialog

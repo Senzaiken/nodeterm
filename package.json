@@ -39,6 +39,14 @@
   "build": {
     "appId": "com.nodeterm.app",
     "productName": "nodeterm",
+    "protocols": [
+      {
+        "name": "nodeterm",
+        "schemes": [
+          "nodeterm"
+        ]
+      }
+    ],
     "directories": {
       "output": "dist",
       "buildResources": "build"

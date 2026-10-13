@@ -56,6 +56,10 @@ const ROWS = {
     title: 'Remember the canvas lock',
     keywords: ['lock', 'canvas', 'view', 'pan', 'zoom', 'freeze', 'remember', 'restart', 'persist']
   },
+  openLinks: {
+    title: 'Allow nodeterm:// links',
+    keywords: ['link', 'url', 'scheme', 'deep link', 'nodeterm://', 'open', 'other apps', 'pr desk', 'protocol', 'external']
+  },
   mdPreview: {
     title: 'Open Markdown in preview',
     keywords: ['markdown', 'md', 'preview', 'render', 'editor', 'docs', 'readme', 'file']
@@ -300,6 +304,19 @@ export function BehaviorSection({ isActive }: { isActive: boolean }): React.JSX.
               checked={settings.rememberCanvasLock}
               onChange={(v) => update({ rememberCanvasLock: v })}
               ariaLabel="Remember the canvas lock"
+            />
+          }
+        />
+      </SearchableRow>
+      <SearchableRow {...ROWS.openLinks}>
+        <FieldRow
+          label="Allow nodeterm:// links"
+          description="Lets other apps, scripts and web pages ask nodeterm to open one agent or terminal node, or pre-fill a pairing code. Every link shows a confirm sheet first and opens nothing until you click Open. Off: links are ignored."
+          control={
+            <Switch
+              checked={settings.allowOpenLinks}
+              onChange={(v) => update({ allowOpenLinks: v })}
+              ariaLabel="Allow nodeterm:// links"
             />
           }
         />

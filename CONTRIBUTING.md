@@ -1174,6 +1174,20 @@ Grok billing diagnostics must keep HTTP codes and safe failure categories per bi
   was typed. Nothing may treat it as "safe to resend": the phone keeps the draft, re-reads, and lets
   the user decide. Only `'refused'` means nothing was typed.
 
+**`nodeterm://` links.** A link proves nothing about who sent it (any web page can build one), so
+the confirm sheet is its whole authority. It is off unless the user turns on
+`settings.allowOpenLinks`, and main checks that flag itself. Three rules get a PR sent back:
+- **No power flags.** A link opens one node in the project's default permission mode. Never add a
+  param for a permission mode, `--after`, a model, a count or "open without asking" (the signed-link
+  design in `docs/superpowers/specs/2026-10-13-open-link-design.md` is the only planned way to skip
+  the sheet).
+- **The renderer only chooses.** Its answer is a candidate id main offered, "new project", and a
+  title. The cwd and prompt in the final open come from main (`src/main/open-link.ts`), never the
+  reply.
+- **Enter never opens it.** Only a pointer click on Open, after the 1 s arm.
+- **What the human sees is what runs.** No hidden Unicode in a prompt or path (`hasHiddenText`), no
+  path that can reach another machine, and the permission mode shown is re-checked at landing.
+
 ## User-owned agent settings
 
 **Nothing writes into an agent's global config except `src/core/agent-integrations.ts`** (issue
