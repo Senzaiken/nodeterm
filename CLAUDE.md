@@ -8797,7 +8797,7 @@ unix-socket forward and dev-server `-L` forward over it. POSIX keeps OpenSSH unt
 ## `nodeterm://` links (another app asks to open a node)
 
 `nodeterm://open?agent=…&project=…|project-cwd=…&cwd=…&prompt=…|prompt-file=…&title=…&source=…`
-lets an app with no node identity (PR Desk, a script, a bookmark) ask for ONE node; the human
+lets an app with no node identity (a review tool, a script, a bookmark) ask for ONE node; the human
 approves every link in a confirm sheet. Spec + as-built decisions:
 `docs/superpowers/specs/2026-10-13-open-link-design.md`. Parser `@shared/open-link`, service
 `main/open-link.ts` (electron-free, tested), wiring `main/open-link-wiring.ts`, sheet

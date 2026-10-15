@@ -1,6 +1,6 @@
 // `nodeterm://` LINKS — the parser. Pure: no electron, no fs (main does the checks that need a disk).
 //
-// An app outside nodeterm (PR Desk, a script, a bookmark) has no node identity, so canvas control
+// An app outside nodeterm (a review tool, a script, a bookmark) has no node identity, so canvas control
 // refuses it by design. A link does not weaken that: it proves NOTHING about who sent it — any web
 // page can build one. It only FILLS IN a form, and the human approves every `open` link in a confirm
 // sheet before anything is created. So this parser is strict on shape and size, and every value it

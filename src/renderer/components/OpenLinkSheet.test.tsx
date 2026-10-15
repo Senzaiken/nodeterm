@@ -33,8 +33,8 @@ const request = (over: Partial<OpenLinkPrompt> = {}): OpenLinkPrompt => ({
   id: 'r1',
   agent: 'claude',
   prompt: 'Review PR #12',
-  source: 'pr-desk',
-  title: 'PR Desk: billing',
+  source: 'my-tool',
+  title: 'Review: billing',
   resolution: {
     candidates: [
       { id: 'api', name: 'asilo-api', cwd: '/dev/api', closed: false },
@@ -81,7 +81,7 @@ describe('OpenLinkSheet', () => {
   it('shows the prompt, the unverified source, the project and the permission mode', () => {
     mount()
     expect(text()).toContain('Open a Claude Code session?')
-    expect(text()).toContain('pr-desk')
+    expect(text()).toContain('my-tool')
     expect(text()).toContain('not verified')
     expect(text()).toContain('Review PR #12')
     expect(text()).toContain('/dev/api')
@@ -99,7 +99,7 @@ describe('OpenLinkSheet', () => {
     await act(async () => {
       pointerClick(button('Open'))
     })
-    expect(onOpen).toHaveBeenCalledWith({ projectId: 'api', title: 'PR Desk: billing' })
+    expect(onOpen).toHaveBeenCalledWith({ projectId: 'api', title: 'Review: billing' })
   })
 
   it('never opens on Enter', () => {

@@ -670,8 +670,9 @@ export function TabBar({
             >
               Project settings…
             </button>
-            {/* The id a `nodeterm://open?project=<id>` link names (another app's config, e.g. PR
-                Desk). A relay tab's id belongs to the host, which a link here cannot open. */}
+            {/* The id a `nodeterm://open?project=<id>` link names (another app's config maps its
+                repositories to these ids). A relay tab's id belongs to the host, which a link here
+                cannot open. */}
             {!menuProject.remote && (
               <button
                 onClick={() => {

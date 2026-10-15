@@ -182,10 +182,10 @@ describe('open-link service: validation', () => {
     h.installed = false
     const svc = createOpenLinkService(h.deps)
     svc.ready()
-    svc.receive('nodeterm://open?agent=codex&prompt-file=/tmp/brief.md&source=pr-desk')
+    svc.receive('nodeterm://open?agent=codex&prompt-file=/tmp/brief.md&source=my-tool')
     await flush()
     const [r] = requests(h)
-    expect(r).toMatchObject({ agent: 'codex', promptFileText: '# Review\n\nPlease look.', agentMissing: true, source: 'pr-desk' })
+    expect(r).toMatchObject({ agent: 'codex', promptFileText: '# Review\n\nPlease look.', agentMissing: true, source: 'my-tool' })
   })
 
   it('refuses a prompt file with text the sheet would not show', async () => {

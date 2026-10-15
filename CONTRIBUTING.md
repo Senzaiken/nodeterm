@@ -1176,7 +1176,7 @@ Grok billing diagnostics must keep HTTP codes and safe failure categories per bi
 
 **`nodeterm://` links.** A link proves nothing about who sent it (any web page can build one), so
 the confirm sheet is its whole authority. It is off unless the user turns on
-`settings.allowOpenLinks`, and main checks that flag itself. Three rules get a PR sent back:
+`settings.allowOpenLinks`, and main checks that flag itself. Four rules get a PR sent back:
 - **No power flags.** A link opens one node in the project's default permission mode. Never add a
   param for a permission mode, `--after`, a model, a count or "open without asking" (the signed-link
   design in `docs/superpowers/specs/2026-10-13-open-link-design.md` is the only planned way to skip

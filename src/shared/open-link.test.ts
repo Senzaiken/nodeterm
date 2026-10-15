@@ -26,7 +26,7 @@ describe('parseNodetermLink — open', () => {
   it('parses every param', () => {
     expect(
       req(
-        'agent=claude&project=p1&cwd=%2FUsers%2Fme%2Frepo&prompt=hello%20there&title=Review%20%2312&source=pr-desk'
+        'agent=claude&project=p1&cwd=%2FUsers%2Fme%2Frepo&prompt=hello%20there&title=Review%20%2312&source=my-tool'
       )
     ).toEqual({
       agent: 'claude',
@@ -34,7 +34,7 @@ describe('parseNodetermLink — open', () => {
       cwd: '/Users/me/repo',
       prompt: 'hello there',
       title: 'Review #12',
-      source: 'pr-desk'
+      source: 'my-tool'
     })
   })
 
@@ -87,7 +87,7 @@ describe('parseNodetermLink — open', () => {
     ['agent=claude&prompt=%00', 'control characters'],
     ['agent=claude&prompt=%1B%5B2J', 'control characters'],
     ['agent=claude&title=a%0Ab', 'control characters'],
-    ['agent=claude&source=pr%E2%80%AEdesk', 'control characters'],
+    ['agent=claude&source=my%E2%80%AEtool', 'control characters'],
     ['agent=claude&prompt=%E0%A4%A', 'not correctly encoded'],
     // Windows reads `/\\host\\share` as UNC; a pre-sheet stat would authenticate to that host.
     ['agent=claude&cwd=%2F%5Cevil.example%5Cshare', 'absolute path'],

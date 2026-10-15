@@ -1,12 +1,12 @@
 # Design: `nodeterm://open` links
 
 **Date:** 2026-10-13
-**Status:** Built (PR 1 + PR 2 + PR Desk's side). Signed links are not built. See "As built" at the end.
-**First consumer:** PR Desk's "Discuss" button (`claude-vault/apps/pr-desk`).
+**Status:** Built (PR 1 + PR 2). Signed links are not built. See "As built" at the end.
+**First consumer:** an external code-review tool's "Discuss" button.
 
 ## Problem
 
-An app outside nodeterm, like PR Desk, a script or a bookmark, has no way to open a session on the canvas. Canvas control (`open-claude`, `open-terminal`, …) only answers callers that carry a node identity. That is on purpose: a process without a node has nothing to prove who it is. So today PR Desk can only copy a `claude …` command for Uri to paste into a terminal node.
+An app outside nodeterm, like a review tool, a script or a bookmark, has no way to open a session on the canvas. Canvas control (`open-claude`, `open-terminal`, …) only answers callers that carry a node identity. That is on purpose: a process without a node has nothing to prove who it is. So today such an app can only copy a `claude …` command for the user to paste into a terminal node.
 
 A URL scheme fixes this without weakening canvas control. The link proves nothing about who sent it. Instead, **the human approves every link in a confirm sheet** before anything opens. The link only fills in the form.
 
@@ -18,7 +18,7 @@ nodeterm://open?agent=claude
                &cwd=<absolute path>
                &prompt=<url-encoded text>        (or prompt-file=<absolute path>)
                &title=<node title>
-               &source=<short label, e.g. pr-desk>
+               &source=<short label, e.g. my-tool>
 ```
 
 | Param | Required | Rules |
@@ -28,9 +28,9 @@ nodeterm://open?agent=claude
 | `project-cwd` | no | Absolute path. Matches the project whose `cwd` equals it. Can't be combined with `project`. |
 | `cwd` | no | Absolute, existing directory. Defaults to the chosen project's `cwd`. |
 | `prompt` | no | The first message for the agent. Capped at 8 KB after decoding. |
-| `prompt-file` | no | Absolute path to a regular file of at most 64 KB, read when Uri accepts. Lets a caller pass a long prompt without a giant URL. Can't be combined with `prompt`. |
+| `prompt-file` | no | Absolute path to a regular file of at most 64 KB, read when the user accepts. Lets a caller pass a long prompt without a giant URL. Can't be combined with `prompt`. |
 | `title` | no | The node title, max 80 characters. `open-claude` has no title option today (`canvas-control-core.ts:865`), so this adds one, or renames the node right after it's created. |
-| `source` | no | Display-only label shown in the sheet. It is never trusted for anything, because any web page can claim `source=pr-desk`. |
+| `source` | no | Display-only label shown in the sheet. It is never trusted for anything, because any web page can claim any `source`. |
 
 The parser rejects:
 - unknown params
@@ -48,7 +48,7 @@ Requirement: a link must be able to name a project, and nodeterm must never quie
 2. **`project-cwd=<path>`**: the project whose `cwd` is exactly that path. If several match, the picker is shown with those preselected first.
 3. **Neither**: nodeterm suggests the project whose `cwd` is the longest prefix of the link's `cwd`, and falls back to the active project.
 
-In every case the project is a **dropdown in the confirm sheet**, pre-filled from the rules above and changeable before accepting. The sheet also offers **"Open `<cwd>` as a new project"** (`projects.ts:78 openFolderProject`) when no project fits. The sheet always shows where the node will land, and Uri always gets to change it.
+In every case the project is a **dropdown in the confirm sheet**, pre-filled from the rules above and changeable before accepting. The sheet also offers **"Open `<cwd>` as a new project"** (`projects.ts:78 openFolderProject`) when no project fits. The sheet always shows where the node will land, and the user always gets to change it.
 
 SSH projects (`Project.ssh`) are out of scope for v1. They aren't offered in the picker, and a `project=` naming one says so.
 
@@ -90,24 +90,18 @@ All of this is in the desktop app only. The Server Edition and relay are untouch
 
 **Existing `nodeterm://pair` and `nodeterm://join` strings.** Once the scheme is registered, clicking one of these opens nodeterm. Route them to the existing pairing and join screens with the code pre-filled. Never auto-accept, because those flows have their own approval. Any other host (`nodeterm://anything-else`) is ignored with a toast.
 
-## PR Desk's side
+## The calling app's side
 
-- **The button:** "Discuss in nodeterm" becomes a plain `<a href="nodeterm://open?…">`. It needs no server round-trip, apart from writing the prompt file as today (`~/.claude/pr-desk/sessions/<id>.prompt.md`).
-- **The project:** taken from `~/.claude/pr-desk/config.json`:
-
-  ```json
-  { "nodetermProjects": { "asilo-api": "<project id>", "doc-flutter": "<project id>" } }
-  ```
-
-  Without a mapping, it sends `project-cwd=~/development/<repo>`. If that matches nothing, the sheet's picker covers it. To make ids easy to copy, nodeterm could add **Copy project id** to the project tab's menu.
-- **Fallbacks:** "Discuss in terminal" (iTerm) and "Copy for nodeterm" stay for when nodeterm isn't running or isn't the registered handler.
+- **The button:** a "Discuss in nodeterm" action becomes a plain `<a href="nodeterm://open?…">`. It needs no server round-trip, apart from writing a prompt file when the prompt is long.
+- **The project:** the app keeps its own map from its repositories to nodeterm project ids. Without a mapping, it sends `project-cwd=<path of the repository>`. If that matches nothing, the sheet's picker covers it. To make ids easy to copy, nodeterm adds **Copy project id** to the project tab's menu.
+- **Fallbacks:** the app keeps its existing copy-a-command path for when nodeterm isn't running or isn't the registered handler.
 
 ## Later: signed links (optional)
 
-If the sheet gets tedious for links Uri makes himself, add signed links:
-- Nodeterm stores an HMAC key per trusted source in the system keychain, created from Settings, where Uri pastes it into PR Desk once.
+If the sheet gets tedious for links the user makes themselves, add signed links:
+- Nodeterm stores an HMAC key per trusted source in the system keychain, created from Settings, which the user pastes into the calling app once.
 - The link carries `ts` and `sig` (HMAC over the canonical params plus `ts`). Nodeterm accepts a signature for 2 minutes and only once.
-- A valid signature shows **"Verified: PR Desk"** instead of the unverified label. It can also unlock an opt-in **"Open without asking"** for that source, stored machine-local in the same way as `trigger-arm-store.ts`.
+- A valid signature shows **"Verified: <source name>"** instead of the unverified label. It can also unlock an opt-in **"Open without asking"** for that source, stored machine-local in the same way as `trigger-arm-store.ts`.
 
 Unsigned links always get the sheet.
 
@@ -124,7 +118,7 @@ Unsigned links always get the sheet.
 
 1. **Parser and scheme registration:** the `open-link.ts` module and its tests, the scheme registration, and `open-url`/argv receipt. It only logs the parsed request and routes `pair`/`join`.
 2. **Confirm sheet and node creation:** the sheet, the project picker, main re-validation, the `origin: 'link'` open path, and the `title` support.
-3. **PR Desk:** switch the button to the link and add the `config.json` project map. This change is in claude-vault, not nodeterm.
+3. **Calling app:** switch its button to the link and add its project map. This change is outside nodeterm.
 4. **Later:** signed links.
 
 ## Open questions
