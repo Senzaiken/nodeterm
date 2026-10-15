@@ -1,5 +1,8 @@
-import { describe, expect, it } from 'vitest'
-import { lastError, parseDiscovery, parseIni } from './android-sdk'
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { lastError, parseDiscovery, parseIni, runningEmulators } from './android-sdk'
 
 // A discovery file as emulator 36.6.11 writes it (token replaced).
 const DISCOVERY = `emulator.build=15507667
@@ -39,5 +42,58 @@ describe('Android discovery', () => {
     const log = 'INFO | Android emulator version 36\nERROR | Running multiple emulators with the same AVD\nINFO | bye\n'
     expect(lastError(log)).toBe('Running multiple emulators with the same AVD')
     expect(lastError('INFO | only info\n')).toBe('INFO | only info')
+  })
+})
+
+// The Linux discovery dir sits under the shared temp dir, where another local user can create
+// `/tmp/android-<user>` first and plant a file whose grpc.port receives the user's keystrokes.
+describe.skipIf(process.platform === 'win32')('runningEmulators trust', () => {
+  const uid = process.getuid!()
+  let base = ''
+  afterEach(() => {
+    vi.restoreAllMocks()
+    if (base) rmSync(base, { recursive: true, force: true })
+    base = ''
+  })
+  function plant(): { dir: string; trustedBase: string } {
+    base = mkdtempSync(path.join(os.tmpdir(), 'nt-avd-'))
+    const dir = path.join(base, 'android-me', 'avd', 'running')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(path.join(dir, `pid_${process.pid}.ini`), DISCOVERY)
+    return { dir, trustedBase: base }
+  }
+
+  it('reads a discovery file in a directory chain we own', async () => {
+    const found = await runningEmulators([plant()], uid)
+    expect(found.map((e) => e.endpoint?.port)).toEqual([8554])
+  })
+
+  it('ignores a directory chain owned by another user', async () => {
+    expect(await runningEmulators([plant()], uid + 1)).toEqual([])
+  })
+
+  it('ignores a symlinked component in the chain', async () => {
+    const real = plant()
+    const linked = path.join(base, 'android-link')
+    symlinkSync(path.join(base, 'android-me'), linked)
+    expect(await runningEmulators([{ dir: path.join(linked, 'avd', 'running'), trustedBase: base }], uid)).toEqual([])
+    expect(await runningEmulators([real], uid)).toHaveLength(1)
+  })
+
+  it('ignores a symlinked discovery file', async () => {
+    const d = plant()
+    const target = path.join(base, 'elsewhere.ini')
+    writeFileSync(target, DISCOVERY)
+    rmSync(path.join(d.dir, `pid_${process.pid}.ini`))
+    symlinkSync(target, path.join(d.dir, `pid_${process.pid}.ini`))
+    expect(await runningEmulators([d], uid)).toEqual([])
+  })
+
+  it("treats a pid we may not signal (EPERM) as not ours", async () => {
+    const d = plant()
+    vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw Object.assign(new Error('EPERM'), { code: 'EPERM' })
+    })
+    expect(await runningEmulators([d], uid)).toEqual([])
   })
 })

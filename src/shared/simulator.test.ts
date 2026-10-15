@@ -199,6 +199,17 @@ describe('normalizeSimulatorAction', () => {
     expect(normalizeSimulatorAction({ a: 'privacy', op: 'grant', service: 'all' })).toBeNull() // grant needs an app
     expect(normalizeSimulatorAction({ a: 'privacy', op: 'grant', service: 'keychain', bundleId: 'com.a.b' })).toBeNull()
     expect(normalizeSimulatorAction({ a: 'install', path: 'relative/My.app' })).toBeNull()
+    // Android runs on Windows too: a picked APK there is a drive path. UNC stays refused.
+    expect(normalizeSimulatorAction({ a: 'install', path: 'C:\\Users\\me\\app.apk' })).toEqual({
+      a: 'install',
+      path: 'C:\\Users\\me\\app.apk'
+    })
+    expect(normalizeSimulatorAction({ a: 'add-media', paths: ['D:/pics/a.png', '/tmp/b.png'] })).toEqual({
+      a: 'add-media',
+      paths: ['D:/pics/a.png', '/tmp/b.png']
+    })
+    expect(normalizeSimulatorAction({ a: 'install', path: '\\\\server\\share\\app.apk' })).toBeNull()
+    expect(normalizeSimulatorAction({ a: 'install', path: 'C:relative.apk' })).toBeNull()
     expect(normalizeSimulatorAction({ a: 'add-media', paths: [] })).toBeNull()
     expect(normalizeSimulatorAction({ a: 'erase-everything' })).toBeNull()
   })

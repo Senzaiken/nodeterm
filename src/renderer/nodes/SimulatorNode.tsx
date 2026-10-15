@@ -29,6 +29,7 @@ import {
   type TouchEdge
 } from '@shared/simulator'
 import { useSession } from '../session/session'
+import { SIMULATOR_RELAY_HINT } from '../lib/addMenuSpec'
 import { ContextMenu } from '../components/ContextMenu'
 import { buildAndroidMenu, buildSimulatorMenu, type SimulatorMenuHandlers } from './simulatorMenu'
 import { NODE_MIN_SIZES } from '../lib/nodeSizing'
@@ -135,7 +136,22 @@ export interface SimulatorViewProps {
  * The simulator screen with its toolbar, ⋯ menu and input — everything but the box around it, so a
  * Simulator node and a run node's inline panel show the same thing.
  */
-export function SimulatorView({ streamId: id, config, onConfig, label, className, style, header, host, barExtras }: SimulatorViewProps) {
+export function SimulatorView(props: SimulatorViewProps) {
+  // A relay tab's project belongs to another machine; its simulator nodes would otherwise stream
+  // THIS machine's devices into it. Refused with the reason (the add rows are disabled there too).
+  const { source } = useSession()
+  if (source === 'relay') {
+    return (
+      <div className={props.className} style={props.style}>
+        {props.header}
+        <div className="sim-node__placeholder">{SIMULATOR_RELAY_HINT}.</div>
+      </div>
+    )
+  }
+  return <SimulatorViewLive {...props} />
+}
+
+function SimulatorViewLive({ streamId: id, config, onConfig, label, className, style, header, host, barExtras }: SimulatorViewProps) {
   const { api } = useSession()
   const configRef = useRef(config)
   configRef.current = config

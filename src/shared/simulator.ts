@@ -481,8 +481,12 @@ export interface SimulatorDeviceState {
 export const BUNDLE_ID = /^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/
 const MAX_PUSH_BYTES = 4096 // APNs' own payload limit
 
+/** An absolute path on the machine running the devices: POSIX (`/…`) or a Windows drive path
+ *  (`C:\…`, `C:/…`) — Android emulators run on every desktop OS, so an APK or media path picked
+ *  on Windows is a drive path. UNC (`\\server\share`) is refused, as file links refuse it. */
 function absPath(v: unknown): v is string {
-  return typeof v === 'string' && v.startsWith('/') && v.length < 4096 && !CONTROL.test(v)
+  if (typeof v !== 'string' || v.length >= 4096 || CONTROL.test(v)) return false
+  return v.startsWith('/') || /^[A-Za-z]:[\\/]/.test(v)
 }
 
 /** The only actions that reach `simctl`, rebuilt field by field. */

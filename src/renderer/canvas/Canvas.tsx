@@ -234,8 +234,7 @@ import {
   CONTENT_ADD_ITEMS,
   agentEntriesToMenuItems,
   buildGroupedAddMenu,
-  SIMULATOR_UNAVAILABLE_HINT,
-  simulatorAvailable,
+  simulatorRefusal,
   type AgentAddEntry,
   type AddHandlers
 } from '../lib/addMenuSpec'
@@ -6215,8 +6214,11 @@ export function Canvas() {
    *  Desktop app only — the menus disable the row elsewhere and this refuses with the same reason. */
   const addSimulator = useCallback(
     (center?: { x: number; y: number }, groupId?: string, config?: SimulatorNodeConfig) => {
-      if (!simulatorAvailable()) {
-        setCopyError(SIMULATOR_UNAVAILABLE_HINT)
+      // A relay tab is the host's project: a node there would show THIS machine's devices and be
+      // written into the host's project file.
+      const refusal = simulatorRefusal(sessionForProject(useProjects.getState().activeProjectId || '').source === 'relay')
+      if (refusal) {
+        setCopyError(refusal)
         return
       }
       setNodes((ns) => {
@@ -10843,7 +10845,8 @@ export function Canvas() {
       hasCwd: !!(useProjects.getState().getProject(activeProjectId)?.ssh?.remoteCwd ??
         useProjects.getState().getProject(activeProjectId)?.cwd),
       isSshProject,
-      isWindowsCore
+      isWindowsCore,
+      isRelayTab: sessionForProject(activeProjectId || '').source === 'relay'
     }),
     [activeProjectId, isSshProject, isWindowsCore]
   )
@@ -18053,7 +18056,7 @@ export function Canvas() {
       ...(isSshProject || isWindowsCore
         ? []
         : [{ id: 'new-run', label: 'New run configuration', icon: <IconPlay />, run: () => void addRun() }]),
-      ...(simulatorAvailable()
+      ...(!simulatorRefusal(activeSession.source === 'relay')
         ? [{ id: 'new-simulator', label: 'New simulator', icon: <IconPhone />, run: () => addSimulator() }]
         : []),
       { id: 'new-dino', label: 'New dino game', icon: <IconDino />, run: () => addDino() },

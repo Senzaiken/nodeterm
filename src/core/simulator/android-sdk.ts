@@ -1,5 +1,6 @@
 import { execFile, spawn } from 'node:child_process'
-import { mkdir, open, readFile, readdir, stat } from 'node:fs/promises'
+import { constants as fsConstants } from 'node:fs'
+import { lstat, mkdir, open, readdir, stat } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
@@ -192,27 +193,61 @@ export interface RunningEmulator {
   endpoint?: EmulatorEndpoint
 }
 
+/** A directory an emulator writes its discovery file into, and the directory below which nothing
+ *  is trusted by location alone: under a shared temp dir another local user can create the path
+ *  first, so every component from `trustedBase` (exclusive) down must be ours. */
+export interface DiscoveryDir {
+  dir: string
+  trustedBase: string
+}
+
 /** The directories an emulator writes its discovery file into (emulator's own temp-dir rules). */
-export function discoveryDirs(): string[] {
+export function discoveryDirs(): DiscoveryDir[] {
   const home = os.homedir()
-  if (process.platform === 'darwin') return [path.join(home, 'Library', 'Caches', 'TemporaryItems', 'avd', 'running')]
+  if (process.platform === 'darwin') {
+    return [{ dir: path.join(home, 'Library', 'Caches', 'TemporaryItems', 'avd', 'running'), trustedBase: home }]
+  }
   if (process.platform === 'win32') {
     const local = process.env.LOCALAPPDATA
-    return local ? [path.join(local, 'Temp', 'avd', 'running')] : []
+    return local ? [{ dir: path.join(local, 'Temp', 'avd', 'running'), trustedBase: local }] : []
   }
-  const dirs: string[] = []
-  if (process.env.XDG_RUNTIME_DIR) dirs.push(path.join(process.env.XDG_RUNTIME_DIR, 'avd', 'running'))
+  const dirs: DiscoveryDir[] = []
+  const xdg = process.env.XDG_RUNTIME_DIR
+  if (xdg) dirs.push({ dir: path.join(xdg, 'avd', 'running'), trustedBase: xdg })
   const user = process.env.USER ?? os.userInfo().username
-  dirs.push(path.join(os.tmpdir(), `android-${user}`, 'avd', 'running'))
+  const tmp = os.tmpdir()
+  dirs.push({ dir: path.join(tmp, `android-${user}`, 'avd', 'running'), trustedBase: tmp })
   return dirs
 }
 
+/** Our uid, or null where the OS has none (Windows: per-user dirs, no shared temp to squat). */
+function currentUid(): number | null {
+  return typeof process.getuid === 'function' ? process.getuid() : null
+}
+
+/** Every component of `dir` below `trustedBase` is a real directory (not a symlink) owned by `uid`.
+ *  A pre-created `/tmp/android-<user>` belonging to someone else would otherwise let them plant a
+ *  discovery file whose `grpc.port` receives everything the user types into the device. */
+async function dirOwnedBy(dir: string, trustedBase: string, uid: number): Promise<boolean> {
+  const rel = path.relative(trustedBase, dir)
+  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return false
+  let cur = trustedBase
+  for (const part of rel.split(path.sep)) {
+    cur = path.join(cur, part)
+    const st = await lstat(cur).catch(() => null)
+    if (!st || !st.isDirectory() || st.uid !== uid) return false
+  }
+  return true
+}
+
+/** Is `pid` a live process WE can signal? EPERM means it exists but belongs to another user —
+ *  not our emulator, so its discovery file is not ours to trust. */
 function pidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0)
     return true
-  } catch (e) {
-    return (e as NodeJS.ErrnoException).code === 'EPERM'
+  } catch {
+    return false
   }
 }
 
@@ -235,9 +270,13 @@ export function parseDiscovery(text: string, pid: number): RunningEmulator | nul
   }
 }
 
-export async function runningEmulators(): Promise<RunningEmulator[]> {
+export async function runningEmulators(
+  dirs: DiscoveryDir[] = discoveryDirs(),
+  uid: number | null = currentUid()
+): Promise<RunningEmulator[]> {
   const out: RunningEmulator[] = []
-  for (const dir of discoveryDirs()) {
+  for (const { dir, trustedBase } of dirs) {
+    if (uid !== null && !(await dirOwnedBy(dir, trustedBase, uid))) continue
     let names: string[]
     try {
       names = await readdir(dir)
@@ -249,14 +288,32 @@ export async function runningEmulators(): Promise<RunningEmulator[]> {
       if (!m) continue
       const pid = Number(m[1])
       if (!pidAlive(pid)) continue
-      // One plain read, no separate check (the discovery dir is under the OS temp dir, so the file
-      // is never opened by handle there). Unreadable = being written or removed.
-      const text = await readFile(path.join(dir, name), 'utf8').catch(() => null)
-      const e = text === null || text.length > 64 * 1024 ? null : parseDiscovery(text, pid)
+      const text = await readOwnedFile(path.join(dir, name), uid)
+      const e = text === null ? null : parseDiscovery(text, pid)
       if (e) out.push(e)
     }
   }
   return out
+}
+
+const MAX_DISCOVERY_BYTES = 64 * 1024
+
+/** Read a discovery file only if it is a regular file owned by `uid` (checked on the open handle,
+ *  so it cannot be swapped between the check and the read; a symlink is refused at open). Null =
+ *  not ours, unreadable (being written or removed), or too large. */
+async function readOwnedFile(file: string, uid: number | null): Promise<string | null> {
+  const fh = await open(file, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0)).catch(() => null)
+  if (!fh) return null
+  try {
+    const st = await fh.stat()
+    if (!st.isFile() || st.size > MAX_DISCOVERY_BYTES) return null
+    if (uid !== null && st.uid !== uid) return null
+    return await fh.readFile('utf8')
+  } catch {
+    return null
+  } finally {
+    await fh.close().catch(() => undefined)
+  }
 }
 
 export async function findRunning(avd: string): Promise<RunningEmulator | null> {

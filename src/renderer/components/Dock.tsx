@@ -210,7 +210,8 @@ export function Dock({
   const contentRows = contentAddItemsToDockRows(CONTENT_ADD_ITEMS, dockAddHandlers, {
     hasCwd,
     isSshProject,
-    isWindowsCore
+    isWindowsCore,
+    isRelayTab: !!activeProject?.remote
   })
 
   return (

@@ -42,6 +42,14 @@ describe('isHostOnlyChannel', () => {
     expect(isHostOnlyChannel(IPC.agentBoardCommentDeliver)).toBe(true)
   })
 
+  it('covers every simulator channel — a relay peer must not drive the host’s devices', () => {
+    for (const ch of (Object.values(IPC) as unknown[]).filter((c): c is string => typeof c === 'string' && c.startsWith('simulator:'))) {
+      expect(isHostOnlyChannel(ch)).toBe(true)
+    }
+    expect(isHostOnlyChannel(IPC.simulatorInput)).toBe(true)
+    expect(isHostOnlyChannel(IPC.simulatorAction)).toBe(true)
+  })
+
   it('covers both station-notice request channels', () => {
     // A guest may not report a pane verdict about the host's nodes…
     expect(isHostOnlyChannel(IPC.stationNoticeDropped)).toBe(true)

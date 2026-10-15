@@ -7,6 +7,7 @@ import {
   describeLaunchFile,
   deviceClaims,
   gateEntriesForPlatform,
+  embedsFlutterWeb,
   normalizeRunConfig,
   parseEnvFile,
   parseJsonc,
@@ -403,6 +404,15 @@ describe('normalizeRunConfig', () => {
   it('drops hostile fields and non-absolute folders', () => {
     expect(normalizeRunConfig({ projectDir: 'rel' })).toBeUndefined()
     expect(normalizeRunConfig({ projectDir: '/a', deviceId: 'x; rm -rf ~', extraArgs: 'a\nb' })).toEqual({ projectDir: '/a', reloadOnSave: true })
+  })
+  it('keeps the Flutter web embed opt-in: an existing config runs in Chrome as before', () => {
+    const plain = normalizeRunConfig({ projectDir: '/a' })!
+    expect(plain.embedBrowser).toBeUndefined()
+    expect(embedsFlutterWeb(plain)).toBe(false)
+    expect(embedsFlutterWeb(normalizeRunConfig({ projectDir: '/a', embedBrowser: false })!)).toBe(false)
+    const on = normalizeRunConfig({ projectDir: '/a', embedBrowser: true })!
+    expect(on.embedBrowser).toBe(true)
+    expect(embedsFlutterWeb(on)).toBe(true)
   })
 })
 

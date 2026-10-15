@@ -2042,16 +2042,20 @@ tmux's `history-limit` keeps the raw value.
   refused; (5) the display state objects are ROCK proxies: no key-value coding, message primitives
   through typed `objc_msgSend`. Input from the renderer is re-validated (`normalizeSimulatorInput`)
   before it reaches the helper. A run node with a simulator device shows a 📱 button that opens (or
-  focuses) the Simulator node for it. Booting a simulator opens DeviceHub (`open -b
-  com.apple.dt.Devices`) — Simulator.app is not supported. **Desktop only** (iOS devices
-  need macOS; Android ones run everywhere): the add rows are disabled with
-  `SIMULATOR_UNAVAILABLE_HINT` in a browser tab, and the bridge/relay stub refuses (the devices must
-  be on the machine running the app). Kanban: not a card. Mobile: N/A.
+  focuses) the Simulator node for it. **Desktop only** (iOS devices need macOS; Android ones run
+  everywhere): the add rows are disabled with `SIMULATOR_UNAVAILABLE_HINT` in a browser tab and
+  with `SIMULATOR_RELAY_HINT` in a relay tab (`simulatorRefusal`, one rule for the menu, the Dock,
+  the palette and `addSimulator`), and a Simulator node that reaches a relay tab anyway (it is in
+  the host's project file) shows that reason instead of streaming — a relay tab's project is the
+  host's, and the devices this renderer can reach are THIS machine's. `simulator:*` is also in
+  `HOST_ONLY_CHANNEL_PREFIXES`, so a relay peer is refused host-side. Kanban: not a card. Mobile: N/A.
   **A device takes input from its FIRST HID client only** (MEASURED: a second client's touches are
   dropped without an error). So the host runs ONE helper per device, shared by every node showing
-  it (`bridges` keyed by UDID, a late joiner replayed the last displays/ready), and booting a
-  simulator no longer opens DeviceHub — DeviceHub showing the device is a client too, and it took
-  touch input away from the node. "Open in DeviceHub" (⋯ menu) says so in its tooltip.
+  it (`bridges` keyed by UDID, a late joiner replayed the last displays/ready). That is why the
+  Simulator node's OWN Boot is headless (`bootSimulator(id, { openWindow: false })`): a window
+  showing the device is a client too, and it took touch input away from the node. A run node's
+  Boot (`run:boot-device`) still opens Simulator.app as it always has — a user with no Simulator
+  node must still see the device. "Open in DeviceHub" (⋯ menu) says so in its tooltip.
   **The ⋯ menu** (`simulatorMenu.tsx`, pure) is a complete map of DeviceHub's menus, from the
   `…MenuItemProvider` names in Xcode 27's DeviceKit: what nodeterm can do runs — HID buttons
   (Home/Lock/Side/Siri/Volume/Play-Pause) and rotation through the helper; everything else through
@@ -2097,13 +2101,15 @@ tmux's `history-limit` keeps the raw value.
   DevTools / VM-service lines skipped; `0.0.0.0` opened as `localhost`), polled with `pty.capture`
   only while the panel is open, the run is up and no page is known. A picked-out URL is marked
   `auto` and re-read on the next run (the port may change); one the person navigated to is kept.
-  A Flutter `chrome`/`edge` run is EMBEDDED by default: `planLaunch` swaps the device for
+  A Flutter `chrome`/`edge` run is EMBEDDED only when the configuration opts in
+  (`runConfig.embedBrowser: true`, ⋯ → "Show web inside this node", shown for a Flutter web run;
+  `embedsFlutterWeb` is the one rule for host and bar) — an existing configuration keeps Flutter's
+  own Chrome window. Opted in, `planLaunch` swaps the device for
   `web-server` (`webServerDevice`, `PlanContext.webServer`) wherever it is named — the pick, `-d` /
   `--device-id` / `-d=` in args or toolArgs, or Dart-Code's `deviceId` field (which used to be
   dropped, not passed as `-d`) — because Chrome would open a window of Flutter's own while the web
   server serves the same app to any browser and prints its URL; Run then opens the browser panel
-  by itself. `runConfig.embedBrowser: false` (⋯ → "Show web inside this node", shown for a Flutter web run)
-  restores Flutter's own Chrome window. ⇱ pops it into a browser node with `dockTo`; its ⇲
+  by itself. ⇱ pops it into a browser node with `dockTo`; its ⇲
   (`nodeterm:dock-preview`, shared with the Simulator node) or 🌐 docks it back. A run node holds
   one panel at a time. The inline page is not part of the browser-node keep-alive pool, so a
   project switch reloads it.
@@ -2130,7 +2136,12 @@ tmux's `history-limit` keeps the raw value.
   demo-mode status bar, URLs, APK installs, media) — every `adb shell` argument single-quoted for
   the DEVICE's shell. Not yet: screen recording, wipe data, foldables, the run node's 📱 for an
   Android emulator. The node is offered in the desktop app on every OS (iOS devices are simply
-  absent off macOS); the Server Edition still refuses it.
+  absent off macOS); the Server Edition and relay tabs still refuse it. Install / Add Media accept a
+  POSIX or a Windows drive path (`C:\…`, `C:/…`; UNC refused), since the emulator runs on Windows too.
+  The emulator's discovery file is trusted only when every directory from the temp/runtime/home
+  base down and the file itself are ours (uid, no symlink, file opened `O_NOFOLLOW`), and a pid we
+  may not signal (EPERM) is another user's, not our emulator — `/tmp/android-<user>` can be created
+  by anyone first, and a planted `grpc.port` would receive every key typed into the device.
 - **dino** (`DinoNode.tsx`) — a small self-contained T-Rex-style runner on a canvas (no PTY);
   high score persists via `data.highScore`.
 - **trigger** (`TriggerNode.tsx`) — a canvas-owned schedule (cron / interval / once) that

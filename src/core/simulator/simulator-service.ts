@@ -312,7 +312,8 @@ export async function bootSimulatorDevice(idRaw: unknown): Promise<{ ok: true } 
   if (!id) return { ok: false, error: 'Pick a simulator.' }
   const avd = avdNameOf(id)
   if (avd) return bootAndroid(avd)
-  return (await bootSimulator(id)) ? { ok: true } : { ok: false, error: 'Could not boot this simulator.' }
+  // Headless: this node is the device's screen (see BootOptions.openWindow).
+  return (await bootSimulator(id, { openWindow: false })) ? { ok: true } : { ok: false, error: 'Could not boot this simulator.' }
 }
 
 export function registerSimulatorIpc(): void {

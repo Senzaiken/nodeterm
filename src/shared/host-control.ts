@@ -68,7 +68,11 @@ export const HOST_ONLY_CHANNEL_PREFIXES: readonly string[] = [
   'watchLink:',
   // Agent-integration consent status: paths in the host's home it kept or wrote. The consent itself
   // is in settings (already host-only).
-  'integrations:'
+  'integrations:',
+  // Simulator node: the host's iOS simulators / Android emulators — boot, erase, install, input.
+  // A relay tab never offers the node (relay-api keeps the namespace local), so a peer sending one
+  // of these is asking to drive the host's devices.
+  'simulator:'
 ]
 
 export const HOST_ONLY_CHANNELS: ReadonlySet<string> = new Set([

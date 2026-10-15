@@ -47,9 +47,16 @@ export interface RunNodeConfig {
   reloadOnSave: boolean
   /** Whether the node shows its terminal (and the extra-arguments field). Default hidden. */
   showTerminal?: boolean
-  /** Flutter web runs (Chrome / Edge): show the app INSIDE the run node (the default — Flutter's
-   *  web server serves it to the node's browser panel). `false` = Flutter's own Chrome window. */
+  /** Flutter web runs (Chrome / Edge): `true` = show the app INSIDE the run node (Flutter's web
+   *  server serves it to the node's browser panel). Absent = Flutter's own Chrome window, what a
+   *  Chrome run has always done. Opt-in, so an existing configuration runs exactly as before. */
   embedBrowser?: boolean
+}
+
+/** Whether a Flutter browser-device run is moved onto Flutter's web server and shown inside the
+ *  node. Opt-in: only an explicit `embedBrowser: true` — the one rule for the host and the bar. */
+export function embedsFlutterWeb(config: Pick<RunNodeConfig, 'embedBrowser'>): boolean {
+  return config.embedBrowser === true
 }
 
 const MAX_PATH = 4096
@@ -101,7 +108,7 @@ export function normalizeRunConfig(raw: unknown): RunNodeConfig | undefined {
   const extraArgs = oneLine(r.extraArgs, MAX_EXTRA_ARGS)
   if (extraArgs) out.extraArgs = extraArgs
   if (r.showTerminal === true) out.showTerminal = true
-  if (r.embedBrowser === false) out.embedBrowser = false
+  if (r.embedBrowser === true) out.embedBrowser = true
   return out
 }
 

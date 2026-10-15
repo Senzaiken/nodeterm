@@ -12,7 +12,7 @@ import {
   type RunStatus
 } from '@shared/run-config'
 import { isShellCommand } from '@shared/agents/pane'
-import { SIMULATOR_UDID } from '@shared/run-config'
+import { SIMULATOR_UDID, embedsFlutterWeb } from '@shared/run-config'
 import { INLINE_SIM_HEIGHT, type InlineSimulatorConfig, type SimulatorNodeConfig } from '@shared/simulator'
 import { SimulatorView } from './SimulatorNode'
 import { BrowserSurface } from './BrowserSurface'
@@ -101,7 +101,8 @@ function parseSig(sig: string): Array<{ id: string; title: string; runConfig: { 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 export function RunBar({ nodeId, config, autoStart, simulator, browser: browserPanel }: Props) {
-  const { api } = useSession()
+  const session = useSession()
+  const { api } = session
   const { updateNodeData, setNodes, getNodes } = useReactFlow()
   const [listing, setListing] = useState<RunEntriesResult | null>(null)
   const [devices, setDevices] = useState<RunDevice[] | null>(null)
@@ -313,10 +314,10 @@ export function RunBar({ nodeId, config, autoStart, simulator, browser: browserP
       }
       const sent = await api.pty.sendText(nodeId, r.command)
       setNeedsRerun(false)
-      // A Flutter web run shows in this node (the host runs it on Flutter's web server — see
-      // `webServerDevice`): open the browser panel for it, unless it is open or popped out already.
+      // A Flutter web run that opted in to showing here (the host runs it on Flutter's web server —
+      // see `webServerDevice`): open the browser panel for it, unless it is open or popped out already.
       const runDevice = target?.pinnedDevice ?? cfg.deviceId
-      if (target?.usesDevice && isWebDeviceId(runDevice) && cfg.embedBrowser !== false && !browserOpenRef.current) {
+      if (target?.usesDevice && isWebDeviceId(runDevice) && embedsFlutterWeb(cfg) && !browserOpenRef.current) {
         setPreviewRef.current({ kind: 'browser', cfg: {} })
       }
       if (sent === 'pasted-not-submitted') say('info', 'The command is in the terminal — press Enter to start.')
@@ -556,7 +557,7 @@ export function RunBar({ nodeId, config, autoStart, simulator, browser: browserP
   }, [api, nodeId, entry?.browser])
 
   // The run's own device (the configuration's, else the pick) — a Flutter web run when it is a
-  // browser device, which shows here unless `embedBrowser` is off.
+  // browser device, which shows here only when `embedBrowser` is on.
   const runDevice = entry?.usesDevice ? (entry.pinnedDevice ?? config.deviceId) : undefined
   const flutterWebRun = isWebDeviceId(runDevice)
 
@@ -570,7 +571,7 @@ export function RunBar({ nodeId, config, autoStart, simulator, browser: browserP
 
   const openPreview = async (kind: PreviewKind) => {
     if (kind === 'browser') {
-      if (flutterWebRun && running && config.embedBrowser === false) {
+      if (flutterWebRun && running && !embedsFlutterWeb(config)) {
         say('info', 'This Flutter web run is in its own Chrome window — turn on ⋯ → “Show web inside this node” and run again to show it here.')
       }
       setPreview({ kind: 'browser', cfg: await browserUrlNow() })
@@ -871,7 +872,7 @@ export function RunBar({ nodeId, config, autoStart, simulator, browser: browserP
         <span className="run-bar__spacer" />
 
         <span className={`run-bar__status run-bar__status--${statusKind}`}>{statusText}</span>
-        {simulatorAvailable() && (
+        {simulatorAvailable(session.source === 'relay') && (
           <>
             {browserPanel && (
               <button type="button" className="run-bar__icon" title="Pop the browser out into its own node" aria-label="Pop out" onClick={popOut}>
@@ -923,8 +924,8 @@ export function RunBar({ nodeId, config, autoStart, simulator, browser: browserP
             >
               <input
                 type="checkbox"
-                checked={config.embedBrowser !== false}
-                onChange={(e) => patch({ embedBrowser: e.target.checked ? undefined : false }, { changesRun: true })}
+                checked={embedsFlutterWeb(config)}
+                onChange={(e) => patch({ embedBrowser: e.target.checked ? true : undefined }, { changesRun: true })}
               />
               Show web inside this node
             </label>

@@ -10,6 +10,7 @@ import {
   contentAddItemsToDockRows,
   FILES_NO_CWD_HINT,
   RUN_SSH_HINT,
+  SIMULATOR_RELAY_HINT,
   RUN_WINDOWS_HINT,
   NEW_FILE_NO_CWD_HINT,
   WORKTREE_NO_CWD_HINT,
@@ -78,6 +79,20 @@ describe('Run configuration row', () => {
   it('is enabled in a local project, even with no folder yet (it asks for one)', () => {
     const [row] = contentAddItemsToMenuItems([{ kind: 'run' }], handlers(), { hasCwd: false, isSshProject: false })
     expect(row).toMatchObject({ label: 'New run configuration' })
+    expect((row as { disabled?: boolean }).disabled).toBeFalsy()
+  })
+})
+
+describe('Simulator row', () => {
+  it('is disabled with its reason in a relay tab — the node would show this machine’s devices', () => {
+    const ctx = { hasCwd: true, isSshProject: false, isRelayTab: true }
+    const [row] = contentAddItemsToMenuItems([{ kind: 'simulator' }], handlers(), ctx)
+    expect(row).toMatchObject({ label: 'New simulator', disabled: true, hint: SIMULATOR_RELAY_HINT })
+    const [dock] = contentAddItemsToDockRows([{ kind: 'simulator' }], handlers(), ctx)
+    expect(dock).toMatchObject({ kind: 'simulator', disabled: true, hint: SIMULATOR_RELAY_HINT })
+  })
+  it('is enabled in a local desktop project', () => {
+    const [row] = contentAddItemsToMenuItems([{ kind: 'simulator' }], handlers(), { hasCwd: true, isSshProject: false })
     expect((row as { disabled?: boolean }).disabled).toBeFalsy()
   })
 })

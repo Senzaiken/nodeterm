@@ -105,6 +105,9 @@ export interface AddCtx {
   /** Whether the core that owns the active project runs on Windows (`hostPlatformFor`). Disables
    *  "New run configuration" — its launcher is a POSIX `sh` script. Absent = not Windows. */
   isWindowsCore?: boolean
+  /** Whether the active project is a relay tab (another machine's core). Disables "New simulator":
+   *  the node would show THIS machine's devices inside the host's project. Absent = not relay. */
+  isRelayTab?: boolean
 }
 
 /**
@@ -145,8 +148,16 @@ export const SIMULATOR_UNAVAILABLE_HINT = 'Simulators need the desktop app'
 /** Whether this renderer can show a Simulator node: the desktop app on any OS — Android emulators
  *  run everywhere; iOS simulators are simply absent from the list off macOS. Not a Server Edition
  *  tab, whose emulators would be the server's. */
-export function simulatorAvailable(): boolean {
-  return !isBrowserRuntime()
+export function simulatorAvailable(relayTab = false): boolean {
+  return !isBrowserRuntime() && !relayTab
+}
+/** A relay tab's project lives on another machine; this machine's simulators do not belong in it. */
+export const SIMULATOR_RELAY_HINT = 'Simulators run on this machine — not in a relay tab'
+/** The simulator row's gate, one rule for the menu, the Dock and the canvas refusal. */
+export function simulatorRefusal(relayTab = false): string | undefined {
+  if (isBrowserRuntime()) return SIMULATOR_UNAVAILABLE_HINT
+  if (relayTab) return SIMULATOR_RELAY_HINT
+  return undefined
 }
 
 /** The core's launcher is a POSIX `sh` script stopped by POSIX signals (see `RUN_WINDOWS_REASON`). */
@@ -204,12 +215,12 @@ export function contentAddItemsToMenuItems(
         out.push({ label: 'New remote…', icon: <IconTerminal />, onClick: () => handlers.remote(remotePos) })
         break
       case 'simulator': {
-        const ok = simulatorAvailable()
+        const refusal = simulatorRefusal(ctx.isRelayTab)
         out.push({
           label: 'New simulator',
           icon: <IconPhone />,
-          disabled: !ok,
-          hint: ok ? undefined : SIMULATOR_UNAVAILABLE_HINT,
+          disabled: !!refusal,
+          hint: refusal,
           onClick: () => handlers.simulator(at)
         })
         break
@@ -324,13 +335,13 @@ export function contentAddItemsToDockRows(
         // here so the Dock's content rows don't duplicate it.
         break
       case 'simulator': {
-        const ok = simulatorAvailable()
+        const refusal = simulatorRefusal(ctx.isRelayTab)
         out.push({
           kind: 'simulator',
           label: 'Simulator',
           icon: <IconPhone />,
-          disabled: !ok,
-          hint: ok ? undefined : SIMULATOR_UNAVAILABLE_HINT,
+          disabled: !!refusal,
+          hint: refusal,
           onClick: () => handlers.simulator()
         })
         break

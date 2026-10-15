@@ -30,7 +30,8 @@ import {
   type RunEntriesResult,
   type RunStartResult,
   type RunStatus,
-  type TaskDef
+  type TaskDef,
+  embedsFlutterWeb
 } from '../shared/run-config'
 import { shellSingleQuote } from '../shared/shell-quote'
 import { findInLoginPath, resolveShellEnvVar, resolveShellPath } from './exec-path'
@@ -210,18 +211,37 @@ export async function listDevices(refresh = false): Promise<RunDevicesResult> {
   return devicesInFlight
 }
 
-export async function bootSimulator(udid: unknown): Promise<boolean> {
-  if (process.platform !== 'darwin' || typeof udid !== 'string' || !SIMULATOR_UDID.test(udid)) return false
+type BootExec = (file: string, args: string[], opts: { timeout: number }) => Promise<unknown>
+
+export interface BootOptions {
+  /** Open Simulator.app once the device is booted — what a run node's Boot has always done, so a
+   *  user without a Simulator node still sees the device. A Simulator node boots WITHOUT it: it is
+   *  the device's screen itself, and MEASURED (Xcode 27) a device takes input only from its FIRST
+   *  HID client, so a window showing it would take touch input away from the node. Default true. */
+  openWindow?: boolean
+}
+
+export async function bootSimulator(udid: unknown, opts: BootOptions = {}): Promise<boolean> {
+  if (process.platform !== 'darwin') return false
+  return bootSimulatorWith(udid, opts, run)
+}
+
+/** `bootSimulator` minus the platform gate, with the process runner injected (tests). */
+export async function bootSimulatorWith(udid: unknown, opts: BootOptions, exec: BootExec): Promise<boolean> {
+  if (typeof udid !== 'string' || !SIMULATOR_UDID.test(udid)) return false
   try {
-    await run('/usr/bin/xcrun', ['simctl', 'boot', udid], { timeout: 60_000 })
+    await exec('/usr/bin/xcrun', ['simctl', 'boot', udid], { timeout: 60_000 })
   } catch (e) {
     if (!/current state: Booted/i.test(String((e as { stderr?: string }).stderr ?? (e as Error).message))) return false
   }
   devicesCache = null
-  // DeviceHub is deliberately NOT opened: the device runs headless and a Simulator node shows it on
-  // the canvas. MEASURED (Xcode 27): a device takes input from its FIRST HID client only, and
-  // DeviceHub showing the device is one — so opening it here took touch input away from the node.
-  // "Open in DeviceHub" in the Simulator node's menu is the explicit way there.
+  if (opts.openWindow !== false) {
+    try {
+      await exec('/usr/bin/open', ['-a', 'Simulator'], { timeout: 15_000 })
+    } catch {
+      /* booted either way; the window is a convenience */
+    }
+  }
   return true
 }
 
@@ -346,7 +366,7 @@ export async function startRun(nodeId: unknown, rawConfig: unknown): Promise<Run
     pythonPath,
     deviceId: config.deviceId,
     extraArgs: config.extraArgs,
-    webServer: config.embedBrowser !== false,
+    webServer: embedsFlutterWeb(config),
     flutterPidFile: flutterPidFile(nodeId),
     tasks
   })
