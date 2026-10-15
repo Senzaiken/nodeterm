@@ -102,6 +102,9 @@ export interface AddCtx {
   hasCwd: boolean
   /** Whether the active project is an SSH project. Disables "New worktree…". */
   isSshProject: boolean
+  /** Whether the core that owns the active project runs on Windows (`hostPlatformFor`). Disables
+   *  "New run configuration" — its launcher is a POSIX `sh` script. Absent = not Windows. */
+  isWindowsCore?: boolean
 }
 
 /**
@@ -144,6 +147,17 @@ export const SIMULATOR_UNAVAILABLE_HINT = 'Simulators need the desktop app'
  *  tab, whose emulators would be the server's. */
 export function simulatorAvailable(): boolean {
   return !isBrowserRuntime()
+}
+
+/** The core's launcher is a POSIX `sh` script stopped by POSIX signals (see `RUN_WINDOWS_REASON`). */
+export const RUN_WINDOWS_HINT = 'Run configurations that launch a process are not supported on Windows yet'
+
+/** The run row's gate, one rule for the menu and the Dock: SSH first (its reason is the more
+ *  specific one), then a Windows core. */
+function runGate(ctx: AddCtx): { disabled: boolean; hint?: string } {
+  if (ctx.isSshProject) return { disabled: true, hint: RUN_SSH_HINT }
+  if (ctx.isWindowsCore) return { disabled: true, hint: RUN_WINDOWS_HINT }
+  return { disabled: false }
 }
 
 /**
@@ -204,8 +218,7 @@ export function contentAddItemsToMenuItems(
         out.push({
           label: 'New run configuration',
           icon: <IconPlay />,
-          disabled: ctx.isSshProject,
-          hint: ctx.isSshProject ? RUN_SSH_HINT : undefined,
+          ...runGate(ctx),
           onClick: () => handlers.run(at)
         })
         break
@@ -327,8 +340,7 @@ export function contentAddItemsToDockRows(
           kind: 'run',
           label: 'Run Configuration',
           icon: <IconPlay />,
-          disabled: ctx.isSshProject,
-          hint: ctx.isSshProject ? RUN_SSH_HINT : undefined,
+          ...runGate(ctx),
           onClick: () => handlers.run()
         })
         break
