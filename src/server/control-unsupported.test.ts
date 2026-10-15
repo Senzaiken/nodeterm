@@ -25,9 +25,6 @@ import {
 } from './control-unsupported'
 
 const SECRET = Buffer.alloc(32, 7)
-// The unverified cases below measure the warning-window answer, so the clock is pinned inside the
-// window: reading the real clock made them fail on the cutoff date itself (2026-10-13).
-const IN_WINDOW = new Date(NODE_IDENTITY_STRICT_AFTER.getTime() - 24 * 60 * 60 * 1000)
 let dir = ''
 
 function control(verb: string, nodeId: string, accept = 'text/plain', token?: string) {
@@ -50,13 +47,11 @@ beforeAll(async () => {
   initPlatform(fakePlatform({ userDataDir: dir }))
   await hookServer.start()
   hookServer.setNodeAuthSecret(SECRET)
-  hookServer.setIdentityClockForTests(() => IN_WINDOW)
   // The exact registration `src/server/index.ts` performs after `hookServer.start()`.
   hookServer.setControlHandler(serverEditionControlHandler)
 })
 
 afterAll(() => {
-  hookServer.setIdentityClockForTests(() => new Date())
   hookServer.clearNodeAuthSecretForTests()
   hookServer.stop()
   resetPlatformForTests()
@@ -65,14 +60,44 @@ afterAll(() => {
 
 describe('the Server Edition refuses canvas control by name', () => {
   it('answers every verb with the same machine-readable error, in JSON', async () => {
+    // Verified, so what is measured is the EDITION's answer on either side of the identity cutoff
+    // (an unverified mutation is refused by identity from 2026-10-13 — covered separately below).
     for (const verb of ['list', 'open-terminal', 'write']) {
-      const res = await control(verb, 'n-1', 'application/json')
+      const res = await control(verb, 'n-1', 'application/json', nodeAuthToken(SECRET, 'n-1'))
       expect(res.status, verb).toBe(400)
       const body = (await res.json()) as { ok: boolean; error: string; message: string }
       expect(body.ok, verb).toBe(false)
       // The name is EXACT and stable — this is the field a client is allowed to branch on.
       expect(body.error, verb).toBe(CONTROL_UNSUPPORTED_ERROR)
       expect(body.error, verb).not.toBe('control unavailable')
+    }
+  })
+
+  it('an unverified caller hears the edition answer inside the warning window, and identity past the cutoff', async () => {
+    try {
+      // One millisecond before the cutoff: an unverified mutation still reaches the handler, so the
+      // Server Edition's named refusal is what it hears — the pre-2026-10-13 behaviour.
+      hookServer.setIdentityClockForTests(() => new Date(NODE_IDENTITY_STRICT_AFTER.getTime() - 1))
+      for (const verb of ['list', 'open-terminal', 'write']) {
+        const res = await control(verb, 'n-window', 'application/json')
+        expect(res.status, verb).toBe(400)
+        const body = (await res.json()) as { ok: boolean; error: string }
+        expect(body.error, verb).toBe(CONTROL_UNSUPPORTED_ERROR)
+      }
+      // At the cutoff the identity gate answers first for a mutation (403, never the edition's
+      // 400); the tolerant `list` is untouched by the date.
+      hookServer.setIdentityClockForTests(() => new Date(NODE_IDENTITY_STRICT_AFTER.getTime()))
+      for (const verb of ['open-terminal', 'write']) {
+        const res = await control(verb, 'n-strict', 'application/json')
+        expect(res.status, verb).toBe(403)
+        const body = (await res.json()) as { error?: string }
+        expect(body.error, verb).not.toBe(CONTROL_UNSUPPORTED_ERROR)
+      }
+      const list = await control('list', 'n-strict', 'application/json')
+      expect(list.status).toBe(400)
+      expect(((await list.json()) as { error: string }).error).toBe(CONTROL_UNSUPPORTED_ERROR)
+    } finally {
+      hookServer.setIdentityClockForTests(() => new Date())
     }
   })
 

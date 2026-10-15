@@ -489,6 +489,22 @@ describe('inbox event production (via recordAgentEvent)', () => {
       expect(fired).toHaveLength(2)
       expect(new Set(fired).size).toBe(2)
     })
+
+    it('mints ids inside the push backend\'s FCM eventId grammar', () => {
+      // push-notify forwards `InboxEvent.id` as `eventId`; the backend (nodeterm-server
+      // lib/fcm-payload.ts) DROPS any id outside this grammar — the Android app's `isSafeId` — so a
+      // format change here (a `:` or `.` separator, say) would silently send the phone back to
+      // matching cards by node+kind+ts with every other test still green.
+      const fired: string[] = []
+      const off = onInboxActionable((e) => fired.push(e.id))
+      vi.setSystemTime(1_789_000_000_123)
+      recordAgentEvent(ev({ state: 'waiting' }))
+      vi.setSystemTime(1_789_000_000_123 + QUESTION_DEDUP_WINDOW_MS + 1)
+      recordAgentEvent(ev({ state: 'waiting' }))
+      off()
+      expect(fired).toHaveLength(2)
+      for (const id of fired) expect(id).toMatch(/^[A-Za-z0-9_-]{1,256}$/)
+    })
   })
 
   it('session reset also resolves a pending question', () => {
