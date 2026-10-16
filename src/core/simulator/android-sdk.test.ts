@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { lastError, parseDiscovery, parseIni, runningEmulators } from './android-sdk'
+import { emulatorSpawnOptions, firstSdkTool, lastError, parseDiscovery, parseIni, runningEmulators } from './android-sdk'
 
 // A discovery file as emulator 36.6.11 writes it (token replaced).
 const DISCOVERY = `emulator.build=15507667
@@ -95,5 +95,20 @@ describe.skipIf(process.platform === 'win32')('runningEmulators trust', () => {
       throw Object.assign(new Error('EPERM'), { code: 'EPERM' })
     })
     expect(await runningEmulators([d], uid)).toEqual([])
+  })
+})
+
+describe('Android SDK tools', () => {
+  it('takes the tool from the first root that has it, not the first root that exists', async () => {
+    const has = new Set([path.join('/studio/sdk', 'emulator', 'emulator')])
+    const check = async (p: string) => has.has(p)
+    expect(await firstSdkTool(['/stale/sdk', '/studio/sdk'], ['emulator', 'emulator'], check)).toBe(path.join('/studio/sdk', 'emulator', 'emulator'))
+    expect(await firstSdkTool(['/stale/sdk'], ['platform-tools', 'adb'], check)).toBeNull()
+  })
+
+  it('never starts the emulator detached on Windows (it would open console windows)', () => {
+    expect(emulatorSpawnOptions('win32')).toEqual({ detached: false, windowsHide: true })
+    expect(emulatorSpawnOptions('darwin').detached).toBe(true)
+    expect(emulatorSpawnOptions('linux').detached).toBe(true)
   })
 })

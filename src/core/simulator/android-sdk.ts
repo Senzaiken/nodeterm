@@ -43,8 +43,9 @@ async function isFile(p: string): Promise<boolean> {
   }
 }
 
-/** The SDK root: ANDROID_HOME, ANDROID_SDK_ROOT, then where Android Studio installs it. */
-export async function androidSdkRoot(): Promise<string | null> {
+/** Every place the SDK may be, in order: ANDROID_HOME, ANDROID_SDK_ROOT, then where Android Studio
+ *  installs it. */
+async function sdkRootCandidates(): Promise<string[]> {
   const candidates = [await envVar('ANDROID_HOME'), await envVar('ANDROID_SDK_ROOT')]
   const home = os.homedir()
   if (process.platform === 'darwin') candidates.push(path.join(home, 'Library', 'Android', 'sdk'))
@@ -52,28 +53,33 @@ export async function androidSdkRoot(): Promise<string | null> {
     const local = process.env.LOCALAPPDATA
     if (local) candidates.push(path.join(local, 'Android', 'Sdk'))
   } else candidates.push(path.join(home, 'Android', 'Sdk'))
-  for (const c of candidates) if (c && (await isDir(c))) return c
+  return candidates.filter((c): c is string => !!c)
+}
+
+/** The SDK root: the first candidate that is a directory. */
+export async function androidSdkRoot(): Promise<string | null> {
+  for (const c of await sdkRootCandidates()) if (await isDir(c)) return c
   return null
 }
 
 const exe = (name: string) => (process.platform === 'win32' ? `${name}.exe` : name)
 
-export async function emulatorBinary(): Promise<string | null> {
-  const sdk = await androidSdkRoot()
-  if (sdk) {
-    const p = path.join(sdk, 'emulator', exe('emulator'))
-    if (await isFile(p)) return p
+/** The first candidate root that HOLDS the tool: a stale ANDROID_HOME pointing at a half-installed SDK
+ *  must not hide the complete one Android Studio installed. Pure over `isFile`, for tests. */
+export async function firstSdkTool(roots: string[], rel: string[], fileCheck: (p: string) => Promise<boolean> = isFile): Promise<string | null> {
+  for (const root of roots) {
+    const p = path.join(root, ...rel)
+    if (await fileCheck(p)) return p
   }
-  return findInLoginPath('emulator')
+  return null
+}
+
+export async function emulatorBinary(): Promise<string | null> {
+  return (await firstSdkTool(await sdkRootCandidates(), ['emulator', exe('emulator')])) ?? findInLoginPath('emulator')
 }
 
 export async function adbBinary(): Promise<string | null> {
-  const sdk = await androidSdkRoot()
-  if (sdk) {
-    const p = path.join(sdk, 'platform-tools', exe('adb'))
-    if (await isFile(p)) return p
-  }
-  return findInLoginPath('adb')
+  return (await firstSdkTool(await sdkRootCandidates(), ['platform-tools', exe('adb')])) ?? findInLoginPath('adb')
 }
 
 /** Where AVDs live, in avdmanager's own order of precedence. */
@@ -360,6 +366,9 @@ const BOOT_WAIT_MS = 120_000
 export async function bootAndroid(avd: string): Promise<{ ok: true } | { ok: false; error: string }> {
   if (!ANDROID_AVD_NAME.test(avd)) return { ok: false, error: 'Invalid device.' }
   if (await findRunning(avd)) return { ok: true }
+  // Checked before spawning: an unknown name would start an emulator that dies at once, and the
+  // user would read its log line instead of the plain reason.
+  if (!(await listAvds()).some((a) => a.name === avd)) return { ok: false, error: `"${avd}" is not an Android virtual device on this machine.` }
   const bin = await emulatorBinary()
   if (!bin) return { ok: false, error: 'The Android emulator was not found (Android SDK → emulator).' }
   const logDir = path.join(platform().userDataDir, 'android-emulator')
@@ -370,11 +379,7 @@ export async function bootAndroid(avd: string): Promise<{ ok: true } | { ok: fal
   const log = await open(logPath, 'w+')
   try {
     let exited: { code: number | null } | null = null
-    const child = spawn(bin, ['-avd', avd, '-no-window'], {
-      detached: true,
-      stdio: ['ignore', log.fd, log.fd],
-      cwd: path.dirname(bin)
-    })
+    const child = spawn(bin, ['-avd', avd, '-no-window'], { ...emulatorSpawnOptions(process.platform), stdio: ['ignore', log.fd, log.fd], cwd: path.dirname(bin) })
     child.on('exit', (code) => (exited = { code }))
     child.on('error', () => (exited = { code: null }))
     child.unref()
@@ -391,6 +396,16 @@ export async function bootAndroid(avd: string): Promise<{ ok: true } | { ok: fal
   } finally {
     await log.close().catch(() => undefined)
   }
+}
+
+/**
+ * How the emulator is started. Off Windows it is detached (its own process group), so it outlives
+ * the app like a tmux session does. On Windows `detached` gives the console-subsystem emulator NO
+ * console, so it and its children open visible console windows of their own; a hidden console
+ * (`windowsHide`) is what keeps a headless device headless there. `unref` lets the app exit either way.
+ */
+export function emulatorSpawnOptions(plat: NodeJS.Platform): { detached: boolean; windowsHide: boolean } {
+  return plat === 'win32' ? { detached: false, windowsHide: true } : { detached: true, windowsHide: true }
 }
 
 /** The last 64 KB of an open log, read at explicit positions. */
