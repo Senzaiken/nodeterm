@@ -350,14 +350,14 @@ export function buildStubApi(): Omit<
       // DESKTOP only, deliberately not bridged: the helper talks to the simulator frameworks
       // of the machine it runs on, and a Server Edition / relay tab's canvas is on another one. The
       // node is not offered there; these say why if reached anyway.
-      start: () => Promise.resolve({ ok: false as const, error: 'Simulator views are only available in the macOS desktop app.' }),
+      start: () => Promise.resolve({ ok: false as const, error: 'Simulator views are only available in the desktop app.' }),
       stop: () => Promise.resolve(),
       input: () => Promise.resolve(false),
       shutdown: () => Promise.resolve(false),
-      action: () => Promise.resolve({ ok: false as const, error: 'Simulator views are only available in the macOS desktop app.' }),
+      action: () => Promise.resolve({ ok: false as const, error: 'Simulator views are only available in the desktop app.' }),
       state: () => Promise.resolve({}),
-      screenshot: () => Promise.resolve({ ok: false as const, error: 'Simulator views are only available in the macOS desktop app.' }),
-      startRecording: () => Promise.resolve({ ok: false as const, error: 'Simulator views are only available in the macOS desktop app.' }),
+      screenshot: () => Promise.resolve({ ok: false as const, error: 'Simulator views are only available in the desktop app.' }),
+      startRecording: () => Promise.resolve({ ok: false as const, error: 'Simulator views are only available in the desktop app.' }),
       stopRecording: () => Promise.resolve({ ok: false as const, error: 'Not recording.' }),
       isRecording: () => Promise.resolve(false),
       onFrame: () => () => {},

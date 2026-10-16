@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { frameParser, parseBridgeStatus } from './simulator-service'
+import { NO_DISPLAY_MESSAGE, frameParser, parseBridgeStatus } from './simulator-service'
 import { SIMBRIDGE_SOURCE } from './simbridge-source'
 
 function frame(w: number, h: number, display: number, jpeg: Buffer): Buffer {
@@ -54,6 +54,11 @@ describe('parseBridgeStatus', () => {
       kind: 'error',
       code: 'not-booted',
       message: 'the simulator is Shutdown'
+    })
+    expect(parseBridgeStatus('{"error":"no-display","message":"the simulator has no framebuffer display"}')).toEqual({
+      kind: 'error',
+      code: 'no-display',
+      message: NO_DISPLAY_MESSAGE
     })
     expect(parseBridgeStatus('not json')).toBeNull()
     expect(parseBridgeStatus('{"ok":"fps"}')).toBeNull()

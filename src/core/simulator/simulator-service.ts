@@ -124,6 +124,9 @@ function emitStatus(nodeId: string, event: SimulatorStatusEvent): void {
   platform().broadcast(IPC.simulatorStatus(nodeId), event)
 }
 
+export const NO_DISPLAY_MESSAGE =
+  'This simulator booted without a working screen. Restart it from the ⋯ menu; if that does not help, use Reset Content and Settings.'
+
 /** Turn one helper status line into an event for the node. Unknown shapes are ignored. */
 export function parseBridgeStatus(line: string): SimulatorStatusEvent | null {
   let o: Record<string, unknown>
@@ -148,6 +151,10 @@ export function parseBridgeStatus(line: string): SimulatorStatusEvent | null {
     return { kind: 'displays', displays, active: typeof o.active === 'number' ? o.active : 0, pinned: o.pinned === true }
   }
   if (typeof o.error === 'string') {
+    // A device CoreSimulator reports as Booted with its display down (input alive, no framebuffer) is
+    // a wedged boot: only shutting it down and booting it again brings the screen back, and an erase
+    // when even that fails. Said here, because the helper's own words name only the symptom.
+    if (o.error === 'no-display') return { kind: 'error', code: o.error, message: NO_DISPLAY_MESSAGE }
     return { kind: 'error', code: o.error, message: typeof o.message === 'string' ? o.message : o.error }
   }
   return null
