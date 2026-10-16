@@ -483,6 +483,18 @@ project's nodes only.** The contract:
   machine-local, but in the **Server Edition** the setting rides that server's settings.json
   (shared by every browser hitting it) while the bit is per browser PROFILE, so two profiles can
   legitimately disagree about the lock. Desktop + Server Edition; **Mobile: N/A** (no canvas).
+  **The lock covers middle-drag on NODES too, and ⌘/Ctrl+middle-drag gets past it** (issue
+  #1130, `renderer/lib/modifierPan.ts`). React Flow's zoom filter accepts a middle-button
+  `mousedown` on a node / edge / selection before it reads `panOnDrag`, so turning `panOnDrag` off
+  never stopped a middle-drag that started on a node header or a terminal's hover guard (the xterm
+  itself was only safe by accident, via the #84 middle-click guard). While locked,
+  `installLockedMiddleGuard` stops a middle `mousedown` in the BUBBLE phase on
+  `.react-flow__viewport` — after the node (tmux, the middle-click paste setting) has seen it, before
+  React Flow's listener on an ancestor. `installModifierPan` is the deliberate way past the lock:
+  ⌘+middle-drag (Ctrl off-mac) pans anywhere, locked or not, by cancelling the pointerdown in the
+  capture phase on the flow wrapper (so no `mousedown` reaches d3, d3-drag or xterm). The
+  `canvas.toggleLock` command ships UNBOUND (⌘⇧L is the sessions sidebar's) and, like every canvas
+  command, does not fire while a terminal has the keyboard.
   It is one GLOBAL bit rather than per-project
   because `<Canvas />` is mounted once and is not keyed by project, so the lock always carried
   across project switches within a session. Restore is gated on settings HYDRATION (Canvas mounts
@@ -1624,7 +1636,10 @@ tmux's `history-limit` keeps the raw value.
   lifecycle: capture on mount + a ↻ refresh, a request token that drops stale/late answers, an
   explicit empty state ('' is an answer; a rejected capture is a failure, not empty), only the
   LAST `MD_OUTPUT_MAX_LINES` (5000) lines rendered and announced when cut, scrolled to the latest
-  output. Entering the view (output or ChatPanel) blurs the xterm; leaving it restores focus
+  output. Entering the view (output or ChatPanel) blurs the xterm and, for the ChatPanel, puts the
+  keyboard in its composer (only when focus was nowhere, in this node or in a terminal — never out
+  of a text field elsewhere; a lazy-loading or disabled composer takes it when it mounts/enables,
+  and an exit cancels the request); leaving it restores focus
   only if the terminal had it on entry AND focus is now nowhere or still inside this node
   (`terminal/useMdModeFocus.ts`). While the view is open, every "take the keyboard" path (hover
   dwell, click, sidebar/notification jump) goes through `focusXtermUnlessCovered` and leaves the
@@ -2014,7 +2029,26 @@ tmux's `history-limit` keeps the raw value.
   `fs.watch` of `<dir>/lib` that deliberately OUTLIVES the node's view; (5) the terminal is hidden
   by default (`runConfig.showTerminal`, toggled by ⋯ with the extra-args field): collapse's
   `display: none` path via `.term-node:has(.run-bar--compact)` and a node height fitted to the
-  rows; a run that ends without our Stop says where to look. No "bring simulator forward":
+  rows; a run that ends without our Stop says where to look; (6) **switching folders keeps the app
+  when it can** (`canHotSwitch`: a running Flutter run, same device, same flavor, Flutter on both
+  sides): the toolbar offers **Switch (keep app)** beside **Rebuild** — type `d` (flutter's own
+  detach: the tool exits, the app keeps running), `flutter attach` from the new folder (only the
+  flags attach accepts survive, `attachArgs`, MEASURED against `flutter attach --help` — attach has
+  no `--flavor`), wait until it prints its key help AFTER its own `▶ flutter attach` line
+  (`attachConnected`), then a hot RESTART — never a reload: a freshly attached tool only pushes
+  files changed after it connected (MEASURED live, Flutter 3.47 / iOS 27.1 simulator: a reload
+  after attaching from the other checkout "Reloaded 0 libraries" and the old code kept running; a
+  SIGUSR2 restart swapped it in 2.6 s, same app pid, no rebuild). **On an iOS simulator attach
+  needs `--debug-url`**: it finds an already-running app by mDNS, which the simulator barely
+  supports ("The Dart VM Service was not discovered after 30 seconds"), and the URL `flutter run`
+  printed is its DDS proxy, gone with the detached tool. `simulatorVmServiceUrl` reads the app's
+  own "The Dart VM service is listening on …" line from `simctl spawn <udid> log show` (~3 s) and
+  takes the newest one whose process is still alive (`parseVmServiceLog`); not found ⇒ the switch
+  is refused with Rebuild offered. Some Macs ship no registered `Simulator.app` (`open -a
+  Simulator` fails); booting falls back to the active Xcode's copy and otherwise runs headless. Flutter REFUSES a hand-passed `FLUTTER_APP_FLAVOR`, so after an
+  attach `appFlavor` is the pubspec default; an app whose `lib/` reads `appFlavor` is refused the
+  switch with that reason. Dart `"request": "attach"` configurations run as `flutter attach` too;
+  every other attach is still refused. No "bring simulator forward":
   Simulator.app can only be activated as a whole (same-named simulators are told apart by id in
   the dropdown). Add menus: **New view ▸ New run configuration**. Local projects only (disabled
   with `RUN_SSH_HINT` in SSH projects; relay stub answers "managed on the host"); POSIX only
@@ -2180,6 +2214,14 @@ goes through `renderer/lib/terminalOutputMarkdown.ts` instead: a private `Marked
 raw-HTML tokens as escaped TEXT (a program's `<stdin>` is not markup; parsed as HTML, DOMPurify
 stripped it) and trims capture-pane's trailing padding. The escape is on the `html` token, never a
 global pre-escape of `<`, which would double-escape code spans/fences.
+
+**The rendered-Markdown font is a setting** (`markdownFontFamily` / `markdownFontSize`, Settings →
+Appearance; `@shared/markdown-font`). App.tsx publishes it as `--md-font-family` / `--md-font-size`
+on <html>, plus `--md-code-font-family` = the TERMINAL font family; styles.css keeps the defaults on
+`:root`. Every rule that sizes rendered Markdown reads the tokens — `.term-md__content` (⌘M output
+view, editor preview, the kanban file preview), `.term-chat__msg` and the ⌘M composer input —
+headings are `em`, and code is `0.92em` of the body (relative, so it stays in proportion).
+`styles.markdown-font.test.ts` pins this. Sticky notes keep their own font on purpose.
 
 **A link in rendered markdown must never navigate the app window.** DOMPurify keeps an anchor's
 href as written, and agents write relative links constantly (`[pty-manager.ts](src/core/pty-manager.ts:4100)`).
@@ -3824,6 +3866,14 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   the legacy and paged paths; absent when the line states none — never a made-up time). One
   60-second `now` tick in ChatPanel drives every row's label. No thumbs / read-aloud / retry (no
   terminal equivalent). `.term-chat__text` stays the markdown sink the link guard scopes to.
+  **Every code block has the same Copy control in its top-right corner** (`nodes/CodeBlockCopy.tsx`;
+  ONE button component, `ChatCopyButton`, shared with the per-turn Copy so the two cannot drift).
+  The Markdown is an HTML string, so after each new string the hook wraps every `<pre>` in a
+  positioned `.term-chat__code` (never inside the `<pre>`: it scrolls sideways and would carry the
+  button) and portals the button beside it. It copies the block's `<code>` text minus marked's one
+  trailing newline (`lib/codeBlockCopy.ts`) — a pasted command must not run on paste. Hover-revealed,
+  kept visible while it says "Copied". Chat messages, thinking and plan/question cards all render
+  through `MarkdownText`, so all get it; the ⌘M output view and the editor preview do not.
   **The composer (2026-09-26, claude.ai-style)** is one rounded box — textarea on top, a toolbar
   under it: "+" attach on the left; model label, muted effort label and a mic on the right (pure
   decisions in `lib/chatComposer.ts`). Four rules: (1) **attach = paths in the DRAFT, resolved the
