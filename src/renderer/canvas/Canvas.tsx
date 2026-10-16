@@ -6260,7 +6260,9 @@ export function Canvas() {
     (center?: { x: number; y: number }, groupId?: string, config?: SimulatorNodeConfig) => {
       // A relay tab is the host's project: a node there would show THIS machine's devices and be
       // written into the host's project file.
-      const refusal = simulatorRefusal(sessionForProject(useProjects.getState().activeProjectId || '').source === 'relay')
+      const activeId = useProjects.getState().activeProjectId || ''
+      const project = useProjects.getState().projects.find((p) => p.id === activeId)
+      const refusal = simulatorRefusal(sessionForProject(activeId).source === 'relay', !!project?.ssh)
       if (refusal) {
         setCopyError(refusal)
         return
@@ -18343,7 +18345,7 @@ export function Canvas() {
       ...(isSshProject || isWindowsCore
         ? []
         : [{ id: 'new-run', label: 'New run configuration', icon: <IconPlay />, run: () => void addRun() }]),
-      ...(!simulatorRefusal(activeSession.source === 'relay')
+      ...(!simulatorRefusal(activeSession.source === 'relay', isSshProject)
         ? [{ id: 'new-simulator', label: 'New simulator', icon: <IconPhone />, run: () => addSimulator() }]
         : []),
       { id: 'new-dino', label: 'New dino game', icon: <IconDino />, run: () => addDino() },

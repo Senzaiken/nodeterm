@@ -187,8 +187,19 @@ const androidHooks: AndroidHooks = {
   status: (nodeId, e) => emitStatus(nodeId, e)
 }
 
+/** Why a node may not show a device at all (an SSH project's node), from the shell that knows which
+ *  project owns a node. Null = allowed. The menus already refuse; this is the backstop for a node that
+ *  arrives anyway (a hand-edited project file, a project converted to SSH). */
+type NodeRefusal = (nodeId: string) => string | null
+let nodeRefusal: NodeRefusal = () => null
+export function setSimulatorNodeRefusal(fn: NodeRefusal | null): void {
+  nodeRefusal = fn ?? (() => null)
+}
+
 export async function startSimulator(nodeId: unknown, udidRaw: unknown): Promise<SimulatorStartResult> {
   if (typeof nodeId !== 'string' || !SIMULATOR_NODE_ID.test(nodeId)) return { ok: false, error: 'Invalid node.' }
+  const refused = nodeRefusal(nodeId)
+  if (refused) return { ok: false, error: refused }
   const id = normalizeDeviceId(udidRaw)
   if (!id) return { ok: false, error: 'Pick a simulator.' }
   const avd = avdNameOf(id)

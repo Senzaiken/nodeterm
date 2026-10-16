@@ -162,6 +162,10 @@ export function normalizeSimulatorConfig(raw: unknown): SimulatorNodeConfig {
   return out
 }
 
+/** The simulators a node shows are THIS machine's devices; an SSH project's work runs on another
+ *  machine. One sentence for the menus, the Dock and the core's refusal. */
+export const SIMULATOR_SSH_HINT = 'Simulators run on this machine — not in SSH projects yet'
+
 export const SIMULATOR_NODE_ID = /^[A-Za-z0-9._-]{1,128}$/
 
 // ── Input ──────────────────────────────────────────────────────────────────────────────────────

@@ -11,6 +11,7 @@ import {
   FILES_NO_CWD_HINT,
   RUN_SSH_HINT,
   SIMULATOR_RELAY_HINT,
+  SIMULATOR_SSH_HINT,
   RUN_WINDOWS_HINT,
   NEW_FILE_NO_CWD_HINT,
   WORKTREE_NO_CWD_HINT,
@@ -90,6 +91,13 @@ describe('Simulator row', () => {
     expect(row).toMatchObject({ label: 'New simulator', disabled: true, hint: SIMULATOR_RELAY_HINT })
     const [dock] = contentAddItemsToDockRows([{ kind: 'simulator' }], handlers(), ctx)
     expect(dock).toMatchObject({ kind: 'simulator', disabled: true, hint: SIMULATOR_RELAY_HINT })
+  })
+  it('is disabled with its reason in an SSH project, as the run row is', () => {
+    const ctx = { hasCwd: true, isSshProject: true }
+    const [row] = contentAddItemsToMenuItems([{ kind: 'simulator' }], handlers(), ctx)
+    expect(row).toMatchObject({ label: 'New simulator', disabled: true, hint: SIMULATOR_SSH_HINT })
+    const [dock] = contentAddItemsToDockRows([{ kind: 'simulator' }], handlers(), ctx)
+    expect(dock).toMatchObject({ kind: 'simulator', disabled: true, hint: SIMULATOR_SSH_HINT })
   })
   it('is enabled in a local desktop project', () => {
     const [row] = contentAddItemsToMenuItems([{ kind: 'simulator' }], handlers(), { hasCwd: true, isSshProject: false })

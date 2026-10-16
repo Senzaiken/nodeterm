@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { NO_DISPLAY_MESSAGE, frameParser, parseBridgeStatus } from './simulator-service'
+import { NO_DISPLAY_MESSAGE, frameParser, parseBridgeStatus, setSimulatorNodeRefusal, startSimulator } from './simulator-service'
 import { SIMBRIDGE_SOURCE } from './simbridge-source'
 
 function frame(w: number, h: number, display: number, jpeg: Buffer): Buffer {
@@ -90,4 +90,18 @@ describe('the embedded Swift helper', () => {
       rmSync(dir, { recursive: true, force: true })
     }
   }, 90_000)
+})
+
+describe('node refusal (SSH projects)', () => {
+  it('refuses a node the shell says may not show devices, before touching any device', async () => {
+    setSimulatorNodeRefusal((id) => (id === 'ssh-node' ? 'Simulators run on this machine — not in SSH projects yet.' : null))
+    try {
+      expect(await startSimulator('ssh-node', '00000000-0000-0000-0000-000000000000')).toEqual({
+        ok: false,
+        error: 'Simulators run on this machine — not in SSH projects yet.'
+      })
+    } finally {
+      setSimulatorNodeRefusal(null)
+    }
+  })
 })

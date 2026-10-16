@@ -372,7 +372,8 @@ import { codexCliCaps, registerCodexCliIpc } from '../core/codex-cli'
 import { registerWallpaperIpc, setWallpaperImageOps } from '../core/wallpaper'
 import { nativeImageWallpaperOps } from './wallpaper-native-image'
 import { registerRunConfigIpc, stopAllRunWatches } from '../core/run-service'
-import { registerSimulatorIpc, stopAllSimulators } from '../core/simulator/simulator-service'
+import { registerSimulatorIpc, setSimulatorNodeRefusal, stopAllSimulators } from '../core/simulator/simulator-service'
+import { SIMULATOR_SSH_HINT } from '../shared/simulator'
 import { stopAllRecordings } from '../core/simulator/simulator-actions'
 import {
   bindCodexThreadIdentity,
@@ -1722,6 +1723,8 @@ app.whenReady().then(async () => {
   registerWallpaperIpc(settingsStore)
   registerRunConfigIpc()
   registerSimulatorIpc()
+  // A node of an SSH project would show THIS machine's devices inside another machine's project.
+  setSimulatorNodeRefusal((nodeId) => (workspaceStore.sshProjectIdForNode(nodeId) !== undefined ? `${SIMULATOR_SSH_HINT}.` : null))
   // Warm the `claude --version` probe now (it spawns a login shell + node, ~sub-second) so the
   // renderer's first `claude.cliCaps()` — awaited on the launch path of a cold-restored agent
   // node — resolves from cache instead of racing the probe into a conservative "no auto".

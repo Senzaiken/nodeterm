@@ -30,6 +30,7 @@
 import type { ReactNode } from 'react'
 import type { MenuItem } from '../components/ContextMenu'
 import { ACCOUNT_CAPABLE_AGENT_IDS } from '@shared/agents/account-binding'
+import { SIMULATOR_SSH_HINT } from '@shared/simulator'
 import { isBrowserRuntime } from '../bridge/runtime'
 import {
   IconAgent,
@@ -153,10 +154,12 @@ export function simulatorAvailable(relayTab = false): boolean {
 }
 /** A relay tab's project lives on another machine; this machine's simulators do not belong in it. */
 export const SIMULATOR_RELAY_HINT = 'Simulators run on this machine — not in a relay tab'
-/** The simulator row's gate, one rule for the menu, the Dock and the canvas refusal. */
-export function simulatorRefusal(relayTab = false): string | undefined {
+export { SIMULATOR_SSH_HINT }
+/** The simulator row's gate, one rule for the menu, the Dock, ⌘K and the canvas refusal. */
+export function simulatorRefusal(relayTab = false, sshProject = false): string | undefined {
   if (isBrowserRuntime()) return SIMULATOR_UNAVAILABLE_HINT
   if (relayTab) return SIMULATOR_RELAY_HINT
+  if (sshProject) return SIMULATOR_SSH_HINT
   return undefined
 }
 
@@ -215,7 +218,7 @@ export function contentAddItemsToMenuItems(
         out.push({ label: 'New remote…', icon: <IconTerminal />, onClick: () => handlers.remote(remotePos) })
         break
       case 'simulator': {
-        const refusal = simulatorRefusal(ctx.isRelayTab)
+        const refusal = simulatorRefusal(ctx.isRelayTab, ctx.isSshProject)
         out.push({
           label: 'New simulator',
           icon: <IconPhone />,
@@ -335,7 +338,7 @@ export function contentAddItemsToDockRows(
         // here so the Dock's content rows don't duplicate it.
         break
       case 'simulator': {
-        const refusal = simulatorRefusal(ctx.isRelayTab)
+        const refusal = simulatorRefusal(ctx.isRelayTab, ctx.isSshProject)
         out.push({
           kind: 'simulator',
           label: 'Simulator',
