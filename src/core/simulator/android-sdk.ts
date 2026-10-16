@@ -302,7 +302,9 @@ const MAX_DISCOVERY_BYTES = 64 * 1024
  *  so it cannot be swapped between the check and the read; a symlink is refused at open). Null =
  *  not ours, unreadable (being written or removed), or too large. */
 async function readOwnedFile(file: string, uid: number | null): Promise<string | null> {
-  const fh = await open(file, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0)).catch(() => null)
+  // Read-only: without O_CREAT nothing is created and the mode is ignored. It is spelled out because
+  // the path is under a shared temp dir, so a reader cannot tell this call apart from a create.
+  const fh = await open(file, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0), 0o600).catch(() => null)
   if (!fh) return null
   try {
     const st = await fh.stat()
