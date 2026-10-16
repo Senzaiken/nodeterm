@@ -363,7 +363,11 @@ const BOOT_WAIT_MS = 120_000
  * gRPC endpoint is published (Android may still be booting — the node shows the boot screen), or
  * with the emulator's own last words if it exits first.
  */
-export async function bootAndroid(avd: string): Promise<{ ok: true } | { ok: false; error: string }> {
+export type AndroidBootResult =
+  | { ok: true; /** Set only when THIS call started the emulator: the process its discovery file names. */ started?: { pid: number; serial?: string } }
+  | { ok: false; error: string }
+
+export async function bootAndroid(avd: string): Promise<AndroidBootResult> {
   if (!ANDROID_AVD_NAME.test(avd)) return { ok: false, error: 'Invalid device.' }
   if (await findRunning(avd)) return { ok: true }
   // Checked before spawning: an unknown name would start an emulator that dies at once, and the
@@ -386,7 +390,8 @@ export async function bootAndroid(avd: string): Promise<{ ok: true } | { ok: fal
     const deadline = Date.now() + BOOT_WAIT_MS
     while (Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 500))
-      if (await findRunning(avd)) return { ok: true }
+      const up = await findRunning(avd)
+      if (up) return { ok: true, started: { pid: up.pid, ...(up.serial ? { serial: up.serial } : {}) } }
       if (exited) {
         const tail = lastError(await readLogTail(log).catch(() => ''))
         return { ok: false, error: tail ? `The emulator stopped: ${tail}` : 'The emulator stopped while starting.' }

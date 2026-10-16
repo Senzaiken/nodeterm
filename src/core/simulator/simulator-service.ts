@@ -16,7 +16,7 @@ import {
   type SimulatorStatusEvent
 } from '../../shared/simulator'
 import { SIMULATOR_UDID } from '../../shared/run-config'
-import { bootSimulator, listSimulatorsChecked } from '../run-service'
+import { bootSimulatorReport, listSimulatorsChecked } from '../run-service'
 import { VM_SHUTDOWN, vmRunState } from './android-grpc'
 import { androidNodeAvd, androidUnary, sendAndroidInput, startAndroid, stopAllAndroid, stopAndroid, type AndroidHooks } from './android-bridge'
 import { bootAndroid, findRunning, listAndroidDevices } from './android-sdk'
@@ -24,6 +24,7 @@ import { renameAtomic, tempNameFor, writeFileAtomic } from '../fs-atomic'
 import { platform } from '../platform'
 import { SIMBRIDGE_SOURCE, SIMBRIDGE_VERSION } from './simbridge-source'
 import { registerSimulatorActionIpc } from './simulator-actions'
+import { createDeviceOwnership } from './device-ownership'
 
 /**
  * Host side of the Simulator node: a live iOS simulator screen on the canvas, with touch, keyboard
@@ -196,6 +197,35 @@ export function setSimulatorNodeRefusal(fn: NodeRefusal | null): void {
   nodeRefusal = fn ?? (() => null)
 }
 
+/** The devices this app's Simulator nodes booted — shut down at quit, and nothing else is. */
+const ownership = createDeviceOwnership({
+  iosBooted: async (udid) => {
+    const r = await listSimulatorsChecked()
+    if (r.error) return null
+    const d = r.devices.find((x) => x.id.toUpperCase() === udid.toUpperCase())
+    return d ? d.state === 'booted' : false
+  },
+  androidPid: async (avd) => (await findRunning(avd))?.pid ?? null,
+  shutdownIos: (udid) => run('/usr/bin/xcrun', ['simctl', 'shutdown', udid], { timeout: 30_000 }),
+  // The emulator saves its quick-boot snapshot and exits on its own after this call; quit does not
+  // wait for that (see shutdownOwnedSimulators).
+  shutdownAndroid: (avd) => androidUnary(avd, 'setVmState', vmRunState(VM_SHUTDOWN), 5_000)
+})
+
+export const OWNED_SHUTDOWN_TIMEOUT_MS = 3_000
+
+/** Quit path: shut down the devices the nodes booted, within a bounded wait. Never throws. */
+export async function shutdownOwnedSimulators(timeoutMs = OWNED_SHUTDOWN_TIMEOUT_MS): Promise<void> {
+  try {
+    const asked = await ownership.shutdownOwned(timeoutMs)
+    if (asked.ios.length || asked.android.length) {
+      console.log(`[simulator] shut down at quit: ${[...asked.ios, ...asked.android.map((a) => `avd:${a}`)].join(', ')}`)
+    }
+  } catch (e) {
+    console.warn('[simulator] shutting down booted devices at quit failed:', (e as Error).message)
+  }
+}
+
 export async function startSimulator(nodeId: unknown, udidRaw: unknown): Promise<SimulatorStartResult> {
   if (typeof nodeId !== 'string' || !SIMULATOR_NODE_ID.test(nodeId)) return { ok: false, error: 'Invalid node.' }
   const refused = nodeRefusal(nodeId)
@@ -303,7 +333,10 @@ export async function shutdownSimulator(udid: unknown): Promise<boolean> {
       return false
     }
     for (let i = 0; i < 60; i++) {
-      if (!(await findRunning(avd))) return true
+      if (!(await findRunning(avd))) {
+        ownership.releaseAndroid(avd)
+        return true
+      }
       await new Promise((r) => setTimeout(r, 500))
     }
     return false
@@ -311,15 +344,21 @@ export async function shutdownSimulator(udid: unknown): Promise<boolean> {
   if (process.platform !== 'darwin' || typeof udid !== 'string' || !SIMULATOR_UDID.test(udid)) return false
   try {
     await run('/usr/bin/xcrun', ['simctl', 'shutdown', udid], { timeout: 60_000 })
+    ownership.releaseIos(udid)
     return true
   } catch (e) {
-    return /current state: Shutdown/i.test(String((e as { stderr?: string }).stderr ?? ''))
+    const already = /current state: Shutdown/i.test(String((e as { stderr?: string }).stderr ?? ''))
+    if (already) ownership.releaseIos(udid)
+    return already
   }
 }
 
 /** Every simulator the node can show: iOS simulators (macOS) and Android virtual devices. */
 export async function listSimulatorDevices(): Promise<SimulatorDevicesResult> {
   const [sims, android] = await Promise.all([listSimulatorsChecked(), listAndroidDevices()])
+  // A device seen shut down is no longer ours: whoever boots it next owns it.
+  for (const d of sims.devices) if (d.state !== 'booted') ownership.releaseIos(d.id)
+  for (const d of android.devices) if (d.state !== 'booted') ownership.releaseAndroid(avdNameOf(d.id) ?? '')
   const ios: SimulatorDevice[] = sims.devices
     .map((d) => ({ id: d.id, name: d.name, platform: 'ios' as const, os: d.platform, state: d.state === 'booted' ? 'booted' : 'shutdown' }))
   return {
@@ -333,9 +372,16 @@ export async function bootSimulatorDevice(idRaw: unknown): Promise<{ ok: true } 
   const id = normalizeDeviceId(idRaw)
   if (!id) return { ok: false, error: 'Pick a simulator.' }
   const avd = avdNameOf(id)
-  if (avd) return bootAndroid(avd)
+  if (avd) {
+    const r = await bootAndroid(avd)
+    // Only an emulator THIS call started is ours to shut down at quit.
+    if (r.ok && r.started) ownership.claimAndroid(avd, r.started.pid)
+    return r.ok ? { ok: true } : r
+  }
   // Headless: this node is the device's screen (see BootOptions.openWindow).
-  return (await bootSimulator(id, { openWindow: false })) ? { ok: true } : { ok: false, error: 'Could not boot this simulator.' }
+  const booted = await bootSimulatorReport(id, { openWindow: false })
+  if (booted === 'booted') ownership.claimIos(id)
+  return booted ? { ok: true } : { ok: false, error: 'Could not boot this simulator.' }
 }
 
 export function registerSimulatorIpc(): void {

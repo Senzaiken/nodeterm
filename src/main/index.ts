@@ -372,7 +372,7 @@ import { codexCliCaps, registerCodexCliIpc } from '../core/codex-cli'
 import { registerWallpaperIpc, setWallpaperImageOps } from '../core/wallpaper'
 import { nativeImageWallpaperOps } from './wallpaper-native-image'
 import { registerRunConfigIpc, stopAllRunWatches } from '../core/run-service'
-import { registerSimulatorIpc, setSimulatorNodeRefusal, stopAllSimulators } from '../core/simulator/simulator-service'
+import { registerSimulatorIpc, setSimulatorNodeRefusal, shutdownOwnedSimulators, stopAllSimulators } from '../core/simulator/simulator-service'
 import { SIMULATOR_SSH_HINT } from '../shared/simulator'
 import { stopAllRecordings } from '../core/simulator/simulator-actions'
 import {
@@ -5449,6 +5449,10 @@ app.on('before-quit', (e) => {
   // restart-to-update flushes earlier, in the updater — on macOS its windows are gone by now.
   // The renderer's save can itself queue a throttled SSH mirror write AFTER the first remote
   // flush took its snapshot, so the remote flush runs again once the renderer answered.
+  // Simulators a Simulator node booted run headless, so nothing would show them after we quit:
+  // shut those down (and only those). Started now so it overlaps the flush; it bounds itself
+  // (OWNED_SHUTDOWN_TIMEOUT_MS) and never throws, so quit is never held by a device.
+  const simulatorsDown = shutdownOwnedSimulators()
   const flush = Promise.allSettled([
     requestRendererFlush(getMainWindow()?.webContents, ipcMain).then(() => remoteWorkspaceIO.flush()),
     remoteWorkspaceIO.flush(),
@@ -5461,6 +5465,7 @@ app.on('before-quit', (e) => {
     // Napi::ThreadSafeFunction::CallJS) — see SpeechService.shutdown. It needs its own budget
     // because the 1500ms cap above is shorter than a transcription, and it costs nothing at
     // all when dictation is idle, which is nearly always.
+    .then(() => simulatorsDown)
     .then(() => speechService.shutdown())
     .finally(() => app.quit())
 })

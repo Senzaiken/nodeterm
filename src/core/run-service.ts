@@ -248,15 +248,24 @@ export async function bootSimulator(udid: unknown, opts: BootOptions = {}): Prom
 
 /** `bootSimulator` minus the platform gate, with the process runner injected (tests). */
 export async function bootSimulatorWith(udid: unknown, opts: BootOptions, exec: BootExec): Promise<boolean> {
-  if (typeof udid !== 'string' || !SIMULATOR_UDID.test(udid)) return false
+  return (await bootSimulatorReport(udid, opts, exec)) !== null
+}
+
+/** Boot, and say whether THIS call booted the device ('booted') or found it already running
+ *  ('already-booted'); null = could not boot. Only a 'booted' device is one the caller may later shut
+ *  down on the user's behalf — one that was already running belongs to whoever started it. */
+export async function bootSimulatorReport(udid: unknown, opts: BootOptions, exec: BootExec = run): Promise<'booted' | 'already-booted' | null> {
+  if (typeof udid !== 'string' || !SIMULATOR_UDID.test(udid)) return null
+  let result: 'booted' | 'already-booted' = 'booted'
   try {
     await exec('/usr/bin/xcrun', ['simctl', 'boot', udid], { timeout: 60_000 })
   } catch (e) {
-    if (!/current state: Booted/i.test(String((e as { stderr?: string }).stderr ?? (e as Error).message))) return false
+    if (!/current state: Booted/i.test(String((e as { stderr?: string }).stderr ?? (e as Error).message))) return null
+    result = 'already-booted'
   }
   devicesCache = null
   if (opts.openWindow !== false) await openSimulatorApp(exec)
-  return true
+  return result
 }
 
 /**
