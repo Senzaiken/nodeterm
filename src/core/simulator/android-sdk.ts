@@ -429,7 +429,41 @@ export function lastError(log: string): string {
 export async function adb(serial: string, args: string[], timeout = 60_000): Promise<string> {
   const bin = await adbBinary()
   if (!bin) throw new Error('adb was not found (Android SDK → platform-tools).')
+  return adbAt(bin, serial, args, timeout)
+}
+
+/** `adb` at a known path (tests pass a fake one). */
+export async function adbAt(bin: string, serial: string, args: string[], timeout = 60_000): Promise<string> {
   const { stdout } = await run(bin, ['-s', serial, ...args], { timeout, maxBuffer: 16 * 1024 * 1024 })
   return stdout
+}
+
+export const BOOT_COMPLETED_WAIT_MS = 90_000
+export const BOOT_COMPLETED_POLL_MS = 1_000
+export const BOOT_NOT_COMPLETED_MESSAGE =
+  'Android is still starting on this device (it has not finished booting after 90 seconds). Try again once its home screen shows.'
+
+/**
+ * Wait until Android on `serial` reports `sys.boot_completed=1`. The emulator publishes its gRPC
+ * endpoint (and the node shows the boot animation) long before Android itself is up, and an `adb
+ * shell` command sent in between fails or acts on a half-started system. A failed `getprop` counts
+ * as "not yet" (adb says the device is offline while it boots). Throws BOOT_NOT_COMPLETED_MESSAGE
+ * once `timeoutMs` has passed.
+ */
+export async function waitForBootCompleted(
+  getprop: () => Promise<string>,
+  opts: { timeoutMs?: number; pollMs?: number; sleep?: (ms: number) => Promise<void>; now?: () => number } = {}
+): Promise<void> {
+  const timeoutMs = opts.timeoutMs ?? BOOT_COMPLETED_WAIT_MS
+  const pollMs = opts.pollMs ?? BOOT_COMPLETED_POLL_MS
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
+  const now = opts.now ?? Date.now
+  const deadline = now() + timeoutMs
+  for (;;) {
+    const value = await getprop().then((v) => v.trim(), () => '')
+    if (value === '1') return
+    if (now() + pollMs > deadline) throw new Error(BOOT_NOT_COMPLETED_MESSAGE)
+    await sleep(pollMs)
+  }
 }
 

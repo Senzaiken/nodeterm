@@ -1,8 +1,19 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { testTmpDir } from '../test-tmp'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { emulatorSpawnOptions, firstSdkTool, lastError, parseDiscovery, parseIni, runningEmulators } from './android-sdk'
+import {
+  BOOT_NOT_COMPLETED_MESSAGE,
+  adbAt,
+  emulatorSpawnOptions,
+  firstSdkTool,
+  lastError,
+  parseDiscovery,
+  parseIni,
+  runningEmulators,
+  waitForBootCompleted
+} from './android-sdk'
 
 // A discovery file as emulator 36.6.11 writes it (token replaced).
 const DISCOVERY = `emulator.build=15507667
@@ -110,5 +121,58 @@ describe('Android SDK tools', () => {
     expect(emulatorSpawnOptions('win32')).toEqual({ detached: false, windowsHide: true })
     expect(emulatorSpawnOptions('darwin').detached).toBe(true)
     expect(emulatorSpawnOptions('linux').detached).toBe(true)
+  })
+})
+
+describe('waiting for Android to finish booting', () => {
+  /** A fake adb: answers `-s <serial> shell getprop sys.boot_completed` from a counter file, empty
+   *  until the Nth call, then "1"; records its argv. */
+  function fakeAdb(readyOnCall: number | null): { bin: string; argv: string } {
+    const dir = testTmpDir('nt-fake-adb-')
+    const bin = path.join(dir, 'adb')
+    const argv = path.join(dir, 'argv')
+    writeFileSync(
+      bin,
+      `#!/bin/sh
+printf '%s\\n' "$*" >> '${argv}'
+n=$(cat '${dir}/n' 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > '${dir}/n'
+${readyOnCall === null ? "echo ''" : `if [ "$n" -ge ${readyOnCall} ]; then echo 1; else echo ''; fi`}
+`,
+      { mode: 0o755 }
+    )
+    return { bin, argv }
+  }
+  const instant = { sleep: async () => undefined, pollMs: 1000 }
+
+  it.skipIf(process.platform === 'win32')('returns once the fake adb reports sys.boot_completed=1', async () => {
+    const { bin, argv } = fakeAdb(3)
+    await waitForBootCompleted(() => adbAt(bin, 'emulator-5554', ['shell', 'getprop', 'sys.boot_completed']), { ...instant, timeoutMs: 90_000 })
+    const calls = readFileSync(argv, 'utf8').trim().split('\n')
+    expect(calls).toEqual(Array(3).fill('-s emulator-5554 shell getprop sys.boot_completed'))
+  })
+
+  it.skipIf(process.platform === 'win32')('gives up with a plain sentence when Android never finishes', async () => {
+    const { bin } = fakeAdb(null)
+    let t = 0
+    await expect(
+      waitForBootCompleted(() => adbAt(bin, 'emulator-5554', ['shell', 'getprop', 'sys.boot_completed']), {
+        timeoutMs: 5_000,
+        pollMs: 1_000,
+        now: () => t,
+        sleep: async (ms) => {
+          t += ms
+        }
+      })
+    ).rejects.toThrow(BOOT_NOT_COMPLETED_MESSAGE)
+  })
+
+  it('treats a failing adb (device still offline) as not booted yet', async () => {
+    let calls = 0
+    await waitForBootCompleted(async () => {
+      calls++
+      if (calls < 3) throw new Error('error: device offline')
+      return '1\n'
+    }, instant)
+    expect(calls).toBe(3)
   })
 })

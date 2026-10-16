@@ -27,7 +27,7 @@ import {
   imageFormat,
   vmRunState
 } from './android-grpc'
-import { adb, findRunning } from './android-sdk'
+import { adb, findRunning, waitForBootCompleted } from './android-sdk'
 import { captureDir, errorText, safeName, stamp } from './simulator-actions'
 
 /**
@@ -43,10 +43,17 @@ const run = promisify(execFile)
 /** The font scales Android's own Settings → Display size and text slider offers. */
 const FONT_SCALES = [0.85, 1, 1.15, 1.3, 1.5, 1.8, 2]
 
-async function serialOf(avd: string): Promise<string> {
+async function runningSerial(avd: string): Promise<string> {
   const r = await findRunning(avd)
   if (!r?.serial) throw new Error('This Android device is not running.')
   return r.serial
+}
+
+async function serialOf(avd: string): Promise<string> {
+  const serial = await runningSerial(avd)
+  // Every caller goes on to `adb shell`, which needs Android itself up, not just the emulator.
+  await waitForBootCompleted(() => adb(serial, ['shell', 'getprop', 'sys.boot_completed'], 10_000))
+  return serial
 }
 
 const sh = (serial: string, cmd: string, timeout?: number) => adb(serial, ['shell', cmd], timeout)
@@ -142,7 +149,8 @@ async function perform(avd: string, a: SimulatorAction): Promise<SimulatorAction
 
 export async function readAndroidState(avd: string): Promise<SimulatorDeviceState> {
   try {
-    const out = await sh(await serialOf(avd), 'cmd uimode night', 5_000)
+    // The menu's ✓ marks: read now or not at all — never held behind a boot wait.
+    const out = await sh(await runningSerial(avd), 'cmd uimode night', 5_000)
     const m = /Night mode:\s*(yes|no)/i.exec(out)
     return m ? { appearance: m[1].toLowerCase() === 'yes' ? 'dark' : 'light' } : {}
   } catch {
