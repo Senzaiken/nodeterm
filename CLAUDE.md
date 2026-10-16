@@ -1522,6 +1522,23 @@ clamp** (`src/shared/scrollback.ts`, re-clamped inside the host for older client
 session) where tmux stores only used cells, and nothing above the renderer's cap is ever shown.
 tmux's `history-limit` keeps the raw value.
 
+### Character widths — one table for every emulator (`@shared/terminal-width`)
+
+Every xterm in the stack sizes characters through `activateTerminalWidths`: the renderer's
+terminals (`renderer/terminal/unicode-width.ts`, which explains the move off Unicode 6) and the
+Windows session host's headless emulator, which is what a reattaching viewer is repainted from.
+The table is Unicode 11 plus one rule xterm's tables lack: **a one-cell emoji followed by VS16
+(U+FE0F) is two cells**, as are the keycap sequences (`1️⃣`). The program writing to the pane
+(`string-width` in every Node agent CLI) and tmux (`variation-selector-always-wide`, on by default)
+both count those pairs as two cells; xterm counted one, and every repaint by absolute position after
+such a character landed a column short and left stale text behind. Measured with claude-hud's
+`⏱️` status line, which read `113` for `11%` and `2h 327` for `2h 32m`. VS15 is deliberately left
+alone (`string-width` sizes `⭐︎` by its base, as xterm already does), and so is an ASCII base
+with VS16 alone (`1️` is not an RGI emoji) and the unqualified keycap `1⃣` (one cell, as tmux sizes
+it; some `string-width` releases say two). Known xterm limitation: in insert mode (IRM) a widened
+join overwrites the next cell instead of shifting the line. Agreement is the goal, not a particular
+number: change the table in that one module, never in one emulator.
+
 ## Terminal node lifecycle (gotchas)
 
 `src/renderer/nodes/TerminalNode.tsx` is the trickiest file:
@@ -3137,7 +3154,52 @@ else, and its context links must keep classifying across restarts).
   put a `.cmd` command on a Linux host); and `isManagedCommand` matches **both** leaves
   (`codex.sh` AND `codex-hook.cmd`) on every platform — matching only the local one would leave a
   pre-fix entry unrecognized, so the fresh one is appended beside it, which is #558 on a second
-  file. Matching both is what REPAIRS an existing Windows install at the next launch. **Both
+  file. Matching both is what REPAIRS an existing Windows install at the next launch.
+  **Codex hook trust is re-checked at every LOCAL Codex spawn, not only at boot, in the HOME that
+  session runs under** (`ensureCodexHooksCurrent(home)` in `core/agents/hooks/codex.ts`, called
+  from `PtyManager.spawnSession` inside the local codex-scope block with the same
+  `codexScope.CODEX_HOME` it puts in the pane's env — a managed account's private home or the
+  system one). Codex reads hooks.json and the config.toml `trusted_hash` blocks from its
+  CODEX_HOME at SESSION START and silently skips an untrusted hook; boot was the only install, so a
+  config.toml rewritten while the app ran (codex's own /hooks flow, another tool, a test run on the
+  real home) left every Codex session started afterwards dark — measured on a Windows desktop:
+  every message to those nodes queued as `targetStatusStale` and expired. `codexHookDrift(home)`
+  is read-only (script + Windows wrapper bytes, our hooks.json entries via the same
+  `buildCodexHooksAndTrust`, and each trust key's hash); only drift re-runs
+  `installCodexHooks(home)`, with a warning naming the home and what was repaired, so a current
+  install never rewrites config.toml (codex writes it too). It never throws into the spawn, never
+  creates a missing home, and an `accountId` that is not a known Codex account gets no repair
+  (never a fallback to `~/.codex`). **Both repairs are consent-gated (issue #744):** the spawn
+  check is reached only through `currentIntegrationLifecycle()?.ensureCodexHooksForLaunch(home)`
+  and the account-home pass only inside `reconcile()` — both in `core/agent-integrations.ts`, both
+  a no-op unless codex is `enabled` (declined, undecided, the Server Edition veto, or no lifecycle
+  registered ⇒ nothing is written). Calling `ensureCodexHooksCurrent` from anywhere else would
+  re-install hooks for a user who declined them. **Managed account homes symlink hooks.json + config.toml to
+  `~/.codex`** (`initializeAccountHome`), so every write goes through the link (`writeTarget`,
+  realpath) — a temp+rename onto the link would replace it with a private copy no later system
+  install reaches. A home whose links were never made or were replaced by real files is repaired in
+  place; boot now covers those homes too (`ensureCodexHooksForAccounts`, from the lifecycle's reconcile in both shells), where before
+  it installed only `~/.codex` and relied on the links. Not covered: SSH hosts (RemoteHooks owns
+  those files) and an in-pane restart/resume that types `codex` without a new spawn.
+  **A trust table is found by its DECODED key, never by spelling** (`tableHeaderPath`,
+  `codex-trust.ts`): bare, `"basic"` (escapes, `\u`) and `'literal'` segments name the same TOML
+  key. Measured live on a Windows desktop (2026-10-07): config.toml held our tables as
+  `[hooks.state.'C:\…']`, the matcher only knew our `"C:\\…"` spelling, the repair APPENDED a second
+  table per key, and Codex refused to start ("duplicate key") — every Codex node dead. The boot
+  install had the same flaw before the launch repair existed; the launch repair just ran it more
+  often. A repair now REWRITES the existing table whatever its quoting (keeping `enabled = false`),
+  and **an edit that would leave any `[table]` defined twice is refused** (`assertTomlTablesUnique`,
+  run inside `upsertHookTrustEntriesInContent` whenever it changed the text): the local installer
+  computes the config.toml edit BEFORE writing hooks.json, so a refusal writes nothing and warns; the
+  SSH installer throws inside its update and writes no config.toml. No TOML parser is in our deps, so
+  the guard is the duplicate-table check, not full validation. **A managed hook command is matched
+  only under our own directories** (`OWN_HOOK_DIRS`: `/.nodeterm`, `/node-terminal`,
+  `/.nodeterm-server` + `/agent-hooks/<leaf>`), never a bare `agent-hooks/<leaf>` tail: another tool keeps
+  `~/.other/agent-hooks/codex-hook.cmd` and the tail match stripped it on every repair (and that tool
+  did the same to ours). A stale entry from a Server Edition run with a custom `--data-dir` is no
+  longer swept — **by repair OR by a declined codex's cleanup** (`removeCodexHooks` shares the
+  matcher). Decided, not overlooked: a decline removes exactly what we wrote, and a tail match cannot
+  tell our legacy entry from another tool's live one, so the inert legacy entry is left. install-helper's matcher for the other agents still matches by tail (not changed here). **Both
   sides of the managed-entry match go through `normalizeHookCommand`** — the marker used to be
   folded to `/` while the stored command was compared raw, so on Windows nodeterm never recognized
   its OWN entry and appended a fresh set every launch (#558: nine copies of nine events, nine
@@ -8967,6 +9029,51 @@ unix-socket forward and dev-server `-L` forward over it. POSIX keeps OpenSSH unt
   (`applyPhoneReadAck`, the ack sweeper's body), plus `fs.browse` (home-jailed, dirs only) and
   `pty.capture`; `host.info` lists them. All additive — an old phone keeps its old path.
 
+## `nodeterm://` links (another app asks to open a node)
+
+`nodeterm://open?agent=…&project=…|project-cwd=…&cwd=…&prompt=…|prompt-file=…&title=…&source=…`
+lets an app with no node identity (a review tool, a script, a bookmark) ask for ONE node; the human
+approves every link in a confirm sheet. Spec + as-built decisions:
+`docs/superpowers/specs/2026-10-13-open-link-design.md`. Parser `@shared/open-link`, service
+`main/open-link.ts` (electron-free, tested), wiring `main/open-link-wiring.ts`, sheet
+`components/OpenLinkSheet.tsx`. Invariants:
+- **Behind a flag, OFF by default** (`settings.allowOpenLinks`, Settings → Behavior "Allow
+  nodeterm:// links"). Main reads it on every link and again on accept; off, a link is not even
+  parsed — one notice says where to turn it on. The scheme is still registered, so the notice is
+  what a click meets.
+- **The parser refuses, never drops**: unknown/duplicate params, over-cap values, relative paths,
+  controls. No canvas-control power flags exist here; `source` is display-only.
+- **Paths are stat'ed before the sheet, so a path may not reach another machine.** A POSIX-form
+  path with a backslash is refused (Windows reads `/\host\share` as UNC and a stat there
+  authenticates to that host — NTLM), as are UNC and the macOS automount roots `/net`, `/Network`.
+- **Nothing the sheet would not show reaches the agent**: `hasHiddenText` (every `\p{Cf}` except
+  ZWJ, plus C1 — bidi overrides, zero-width, Unicode TAG "ASCII smuggling") refuses an inline
+  prompt, a prompt file's text, every path and every label. The sheet prints the prompt's size.
+- **The permission mode shown is the one launched.** A new-project choice adopts the folder's
+  committed `project.json`, so the sheet probes it (Open waits) and labels from it; a mode that
+  differs at landing refuses. `bypassPermissions` gets a warning in the sheet.
+- **The prompt file is read from ONE non-blocking open** (no stat first, `O_NONBLOCK` so a FIFO
+  cannot park a thread, looped read to EOF/cap). A project whose folder changed while the sheet was
+  up refuses on accept; `/`, the home folder and its ancestors are never offered as a new project.
+- **Main is the authority**: it resolves project candidates from ITS workspace index (SSH and
+  handed-off projects never offered), stats the cwd, reads `prompt-file`, and on accept re-checks
+  the renderer's choice (a candidate id or the offered new-project folder), re-reads the file,
+  refuses if it changed, and copies it into `<userData>/launch-prompts`. Requests are single use and
+  expire after 10 min.
+- **Delivery**: `open-url` registered in `will-finish-launching` (macOS), argv on cold start and in
+  `second-instance` (Windows/Linux); held until the renderer calls `openLink.ready()`, held again on
+  every page death (`clearRendererKeyState`). 5 links a minute; a second link replaces only an
+  untouched sheet. The window raise is the shared `raiseForUserLaunch`.
+- **The sheet**: Enter never opens, nor Space on the focused button (`detail === 0` is ignored);
+  Open is disabled for 1 s, then a pointer click only. A second link replaces the sheet only within
+  that first second and untouched — after that it is dropped (reading fires no event). An accepted
+  link waiting for its project to load is dropped after 30 s, never created later.
+- `pair`/`join` links open the existing code prompt pre-filled; never auto-connect.
+- Desktop only. Server Edition stub is inert; `open-link:` is a host-only prefix. A dev run registers
+  the scheme only with `NODETERM_DEV_PROTOCOL=1`. An `NT_MULTI` sandbox takes links (argv,
+  `second-instance`, `open -a <Electron.app> 'nodeterm://…'`) only with that variable and never
+  registers the scheme — that is the live-test setup beside an installed app.
+
 ## Push webhook (a script or CI job rings the paired phone)
 
 Settings → Phone → **Push webhook** mints a per-host bearer token; anything that can run `curl`
@@ -9950,6 +10057,32 @@ For every OTHER test dir, two layers, both needed:
   `hook-endpoint.env` into the first core's already-removed directory. `initContextLink` and
   `hookServer.stop()` now drop the memo. Found with `strace -f -e trace=mkdir,rename` — an EMPTY
   leftover dir is the signature of a late writer, not of a missing `rm`.
+
+## The test suite never touches the real home
+
+The hook installers write the user's real agent config — `~/.codex/hooks.json` plus the
+`[hooks.state."…"]` trust blocks in `~/.codex/config.toml`, `~/.claude/settings.json`,
+`~/.gemini/settings.json`, grok's and copilot's hook files — and they resolve home through
+`import { homedir } from 'os'`. **A `vi.spyOn(os, 'homedir')` does not reach that binding**:
+measured on a Windows dev box, running `src/core/agents/hooks/index.test.ts` alone (which
+"isolated" home with exactly that spy) rewrote the developer's real `~/.codex/config.toml` and
+`hooks.json`. Runs from several worktrees then raced each other, and the user's own Codex, on those
+files; a Codex session started inside that window had no trust entries for nodeterm's hooks, so its
+hooks never fired and every agent message to it expired as `targetStatusStale`.
+
+- **Every run gets a private home** (`test/setup/home-sandbox.ts` + `home-worker-env.ts`,
+  `src/core/test-home.ts`): HOME and USERPROFILE point at one directory created and removed by
+  `globalSetup`, re-asserted per worker (refusing to run without it), and the agents' relocation
+  variables (`CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `GROK_HOME`, `COPILOT_HOME`, `GEMINI_CLI_HOME`,
+  `KIMI_CODE_HOME`, `XDG_*`) are cleared. On Windows APPDATA/LOCALAPPDATA move inside it too.
+  `os.homedir()` reads the variable on every call, so every installer and every child process lands
+  in the sandbox whatever its import style. Registered BEFORE the temp sandbox (it lives in the real
+  temp dir and is never counted as a leak there).
+- A test that needs its own home uses a MODULE mock (`vi.mock('os', …)` returning `homedir`, as
+  `install-helper.fs.test.ts` and `codex.ensure.test.ts` do), never the spy.
+- `src/core/test-home.guard.test.ts` runs the real `installCodexHooks()` and proves it wrote the
+  sandbox while the real `~/.codex` (read from `os.userInfo().homedir`, which ignores HOME) kept its
+  size and mtime.
 
 ## Conventions
 

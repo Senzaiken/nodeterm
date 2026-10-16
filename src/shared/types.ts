@@ -1963,6 +1963,13 @@ export interface Settings {
    *  the lock is one person's view state. Machine-local on Desktop; in the Server Edition this
    *  setting is the server's while the lock is per browser profile. */
   rememberCanvasLock: boolean
+  /** Whether `nodeterm://` links from other apps are handled (docs/superpowers/specs/
+   *  2026-10-13-open-link-design.md). OFF by default: a link can come from any web page, script
+   *  or app, so taking them is something a person turns on. On, a `nodeterm://open` link shows a
+   *  confirm sheet and opens ONE agent or terminal node only after a click; `nodeterm://pair` and
+   *  `nodeterm://join` pre-fill the code prompt. Off, a link opens nothing and a notice says where
+   *  to turn it on. Machine-local (settings.json); read by main on every link. */
+  allowOpenLinks: boolean
   /** Open Markdown files (.md, .markdown, …) in rendered preview instead of the code editor.
    *  Only picks the view an editor node OPENS in — the node's Preview/Edit toggle (and the
    *  markdown-toggle chord) still switches either way. Default ON since the release after
@@ -2416,6 +2423,7 @@ export const DEFAULT_SETTINGS: Settings = {
   focusZoomToNode: true,
   offerCloseProjectOnLastSession: false,
   rememberCanvasLock: false,
+  allowOpenLinks: false,
   openMarkdownPreview: true,
   openMarkdownPreviewMigrated: true,
   terminalMiddleClickPaste: false,
@@ -4344,6 +4352,22 @@ export interface TriggersApi {
   ): Promise<{ outcome: 'fired' | 'missed' | 'failed' | 'queued'; detail?: string }>
 }
 
+/** `nodeterm://` links (see main/open-link.ts, @shared/open-link). */
+export interface OpenLinkApi {
+  /** The renderer is listening: main delivers any link that arrived before (a cold start). */
+  ready(): void
+  /** An `open` link for the confirm sheet. */
+  onRequest(listener: (req: import('./open-link').OpenLinkPrompt) => void): () => void
+  /** A `pair` / `join` link: route to the existing pairing / join flow, never auto-accept. */
+  onPair(listener: (link: { kind: 'pair' | 'join'; url: string }) => void): () => void
+  /** A refused or dropped link, as one sentence for a toast. */
+  onNotice(listener: (n: { text: string }) => void): () => void
+  /** The human's choice; main re-checks it and answers with the final open. */
+  accept(id: string, choice: import('./open-link').OpenLinkChoice): Promise<import('./open-link').OpenLinkAcceptResult>
+  /** The sheet was dismissed (or replaced): forget the request. */
+  cancel(id: string): void
+}
+
 export interface NodeTerminalApi {
   pty: PtyApi
   workspace: WorkspaceApi
@@ -4410,6 +4434,9 @@ export interface NodeTerminalApi {
   pairing: PairingApi
   presence: PresenceApi
   shortcuts: ShortcutsApi
+  /** `nodeterm://` links clicked outside the app. Desktop only (the Server Edition has no URL
+   *  scheme: its stub never fires and refuses accept). */
+  openLink: OpenLinkApi
   /** Fires when the user presses Cmd/Ctrl+M (toggle markdown view). Returns unsubscribe. */
   onMarkdownToggle(listener: () => void): () => void
   /** Fires when the user presses Cmd/Ctrl+W (close selected node). Returns unsubscribe. */

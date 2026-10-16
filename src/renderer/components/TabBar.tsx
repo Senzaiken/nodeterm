@@ -674,6 +674,19 @@ export function TabBar({
             >
               Project settings…
             </button>
+            {/* The id a `nodeterm://open?project=<id>` link names (another app's config maps its
+                repositories to these ids). A relay tab's id belongs to the host, which a link here
+                cannot open. */}
+            {!menuProject.remote && (
+              <button
+                onClick={() => {
+                  window.nodeTerminal.clipboard.writeText(menuProject.id)
+                  closeMenu()
+                }}
+              >
+                Copy project id
+              </button>
+            )}
             <button
               onClick={() => {
                 onCloseProject(menuProject.id)
