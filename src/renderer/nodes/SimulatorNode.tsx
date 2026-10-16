@@ -168,7 +168,8 @@ function SimulatorViewLive({ streamId: id, config, onConfig, label, className, s
   const lastBitmap = useRef<ImageBitmap | null>(null)
 
   const [devices, setDevices] = useState<SimulatorDevice[] | null>(null)
-  const [androidError, setAndroidError] = useState<string | undefined>(undefined)
+  /** Why a platform's list is empty when its tools could not run (no Xcode selected, no Android SDK). */
+  const [listError, setListError] = useState<string | undefined>(undefined)
   const [phase, setPhase] = useState<Phase>('idle')
   const [message, setMessage] = useState<string | null>(null)
   const [displays, setDisplays] = useState<SimulatorDisplayInfo[]>([])
@@ -201,7 +202,7 @@ function SimulatorViewLive({ streamId: id, config, onConfig, label, className, s
     (refresh: boolean) => {
       void api.simulator.devices(refresh).then((r) => {
         setDevices(r.devices)
-        setAndroidError(r.androidError)
+        setListError([r.iosError, r.androidError].filter(Boolean).join(' ') || undefined)
       })
     },
     [api]
@@ -857,7 +858,7 @@ function SimulatorViewLive({ streamId: id, config, onConfig, label, className, s
           {phase !== 'live' && (
             <div className="sim-node__placeholder">
               {!udid
-                ? `Pick a simulator above.${androidError ? ` ${androidError}` : ''}`
+                ? `Pick a simulator above.${listError ? ` ${listError}` : ''}`
                 : device && !booted
                   ? 'This simulator is shut down — Boot it to see its screen.'
                   : phase === 'starting'

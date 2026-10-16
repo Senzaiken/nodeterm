@@ -13,6 +13,7 @@ import {
   listEntries,
   runStatus,
   setWatch,
+  simctlSetupError,
   signalRun,
   startRun,
   stopAllRunWatches,
@@ -345,5 +346,14 @@ describe('bootSimulatorWith', () => {
     expect(await bootSimulatorWith('../x', {}, r.exec)).toBe(false)
     expect(r.calls).toEqual([])
     expect(await bootSimulatorWith(UDID, {}, recorder('No such device').exec)).toBe(false)
+  })
+})
+
+describe('simctlSetupError', () => {
+  it('turns a missing or unselected Xcode into the fix, and nothing else', () => {
+    expect(simctlSetupError(Object.assign(new Error('spawn /usr/bin/xcrun ENOENT'), { code: 'ENOENT' }))).toMatch(/xcode-select --switch/)
+    expect(simctlSetupError({ message: 'Command failed', stderr: 'xcrun: error: unable to find utility "simctl", not a developer tool or in PATH' })).toMatch(/Install Xcode/)
+    expect(simctlSetupError({ message: 'Command failed', stderr: 'xcode-select: error: tool \'xcrun\' requires Xcode, but active developer directory is a command line tools instance' })).toMatch(/xcode-select/)
+    expect(simctlSetupError({ message: 'timeout' })).toBeNull()
   })
 })

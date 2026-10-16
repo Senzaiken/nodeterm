@@ -16,7 +16,7 @@ import {
   type SimulatorStatusEvent
 } from '../../shared/simulator'
 import { SIMULATOR_UDID } from '../../shared/run-config'
-import { bootSimulator, listSimulators } from '../run-service'
+import { bootSimulator, listSimulatorsChecked } from '../run-service'
 import { VM_SHUTDOWN, vmRunState } from './android-grpc'
 import { androidNodeAvd, androidUnary, sendAndroidInput, startAndroid, stopAllAndroid, stopAndroid, type AndroidHooks } from './android-bridge'
 import { bootAndroid, findRunning, listAndroidDevices } from './android-sdk'
@@ -301,10 +301,14 @@ export async function shutdownSimulator(udid: unknown): Promise<boolean> {
 
 /** Every simulator the node can show: iOS simulators (macOS) and Android virtual devices. */
 export async function listSimulatorDevices(): Promise<SimulatorDevicesResult> {
-  const [sims, android] = await Promise.all([listSimulators(), listAndroidDevices()])
-  const ios: SimulatorDevice[] = sims
+  const [sims, android] = await Promise.all([listSimulatorsChecked(), listAndroidDevices()])
+  const ios: SimulatorDevice[] = sims.devices
     .map((d) => ({ id: d.id, name: d.name, platform: 'ios' as const, os: d.platform, state: d.state === 'booted' ? 'booted' : 'shutdown' }))
-  return { devices: [...ios, ...android.devices], ...(android.error ? { androidError: android.error } : {}) }
+  return {
+    devices: [...ios, ...android.devices],
+    ...(sims.error ? { iosError: sims.error } : {}),
+    ...(android.error ? { androidError: android.error } : {})
+  }
 }
 
 export async function bootSimulatorDevice(idRaw: unknown): Promise<{ ok: true } | { ok: false; error: string }> {

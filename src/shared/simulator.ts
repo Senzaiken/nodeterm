@@ -55,6 +55,8 @@ export interface SimulatorDevice {
 
 export interface SimulatorDevicesResult {
   devices: SimulatorDevice[]
+  /** Why there are no iOS simulators, when simctl itself could not run (no Xcode selected). */
+  iosError?: string
   /** Why there are no Android devices, when that is not simply "none installed". */
   androidError?: string
 }

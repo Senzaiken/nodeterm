@@ -127,8 +127,24 @@ async function shellEnv(): Promise<NodeJS.ProcessEnv> {
   return p ? { ...process.env, PATH: p } : process.env
 }
 
+/** What `xcrun simctl` printed (or threw) when it could not run at all, as the fix the user needs.
+ *  Null for any other failure: only a missing / unselected Xcode has an answer we can give. */
+export function simctlSetupError(e: unknown): string | null {
+  const err = e as { code?: unknown; message?: unknown; stderr?: unknown }
+  const text = `${String(err?.message ?? '')}\n${String(err?.stderr ?? '')}`.toLowerCase()
+  if (err?.code === 'ENOENT' || (text.includes('unable to find utility') && text.includes('simctl')) || text.includes('not a developer tool') || text.includes('requires xcode')) {
+    return 'Xcode\'s simulator tools are not available. Install Xcode, open it once, then select it with: sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer'
+  }
+  return null
+}
+
 export async function listSimulators(): Promise<RunDevice[]> {
-  if (process.platform !== 'darwin') return []
+  return (await listSimulatorsChecked()).devices
+}
+
+/** `listSimulators`, plus why the list is empty when simctl itself could not run. */
+export async function listSimulatorsChecked(): Promise<{ devices: RunDevice[]; error?: string }> {
+  if (process.platform !== 'darwin') return { devices: [] }
   try {
     const { stdout } = await run('/usr/bin/xcrun', ['simctl', 'list', 'devices', 'available', '-j'], {
       timeout: 15_000,
@@ -150,11 +166,14 @@ export async function listSimulators(): Promise<RunDevice[]> {
         })
       }
     }
-    return out.sort((a, b) =>
-      a.state === b.state ? a.name.localeCompare(b.name) : a.state === 'booted' ? -1 : 1
-    )
-  } catch {
-    return []
+    return {
+      devices: out.sort((a, b) =>
+        a.state === b.state ? a.name.localeCompare(b.name) : a.state === 'booted' ? -1 : 1
+      )
+    }
+  } catch (e) {
+    const error = simctlSetupError(e)
+    return error ? { devices: [], error } : { devices: [] }
   }
 }
 
