@@ -421,6 +421,9 @@ export interface AgentStatusStore {
   /** Record a /loop iteration (count++ and append its summary). No-op if not looping. */
   bumpLoop(id: string, message?: string): void
   remove(id: string): void
+  /** Drop several entries with ONE write of each key (the boot sweep of orphaned entries —
+   *  `orphanStatusIds` in lib/unreadBadge.ts decides which). Ids not in the table are ignored. */
+  removeMany(ids: readonly string[]): void
 }
 
 /** The persisted "last seen" clock (see `AgentNodeStatus.lastSeen`). */
@@ -1200,6 +1203,21 @@ export function createAgentStatusSession(
         save(byId)
         // Now, not on the debounce: the deleted node's clock must not outlive it on disk.
         if (s.byId[id].lastSeen) saveClocks(byId)
+        return { byId }
+      }),
+
+    removeMany: (ids) =>
+      set((s) => {
+        const present = ids.filter((id) => id in s.byId)
+        if (present.length === 0) return s
+        const byId = { ...s.byId }
+        let clocks = false
+        for (const id of present) {
+          if (byId[id].lastSeen) clocks = true
+          delete byId[id]
+        }
+        save(byId)
+        if (clocks) saveClocks(byId)
         return { byId }
       })
   }))

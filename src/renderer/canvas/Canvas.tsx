@@ -520,6 +520,7 @@ import {
 } from '../lib/explorerPinHint'
 import { addRelayTab, sameSshEndpoint, setKanbanPublishHook, setStoredCanvasPublishHook, useProjects } from '../state/projects'
 import { useAgentStatus, recordsTurnInterrupt } from '../state/agentStatus'
+import { countUnreadInProjects, orphanStatusIds, unreadIdSet, unreadIdsSig } from '../lib/unreadBadge'
 import { usePendingPause, startPendingPauseWatcher } from '../state/pendingPause'
 import {
   planBulkPause,
@@ -3255,6 +3256,7 @@ export function Canvas() {
   )
 
   // 1) Load the whole workspace once and hydrate the projects store.
+  const [workspaceLoaded, setWorkspaceLoaded] = useState(false)
   useEffect(() => {
     let cancelled = false
     // Pull the current license status: the main process broadcasts it on launch, but that
@@ -3291,6 +3293,13 @@ export function Canvas() {
       // persists the conversion, so the next load is a no-op.
       const projects = ws.projects.map(migrateProjectTags)
       useProjects.getState().hydrate({ ...ws, projects })
+      // Drop status entries whose node is in no project (past a grace window) — the table is
+      // persisted and otherwise grows forever. `orphanStatusIds` refuses to judge an incomplete
+      // load (no projects, or an unreadable one), so a bad index read never costs a live node its
+      // resume id.
+      const status = useAgentStatus.getState()
+      status.removeMany(orphanStatusIds(status.byId, useProjects.getState().projects, Date.now()))
+      setWorkspaceLoaded(true)
       // Upgrade the on-disk format (e.g. v1 -> v2 migration) right away. Reported like every
       // other save: a `void` here used to make the very first write of the session the one write
       // that could fail with no signal at all — including the format migration.
@@ -5209,17 +5218,21 @@ export function Canvas() {
     if (valid.length !== linkEdges.length) setLinkEdges(valid)
   }, [linkEdges, nodes, setLinkEdges])
 
-  // Reflect Claude nodes with unread output as a macOS Dock badge count (across all projects).
-  // Subscribes to the derived count (a primitive), not the byId map, for the same reason as
-  // loopSig above — state flips must not re-render the canvas.
-  const unreadCount = useAgentStatus((s) => {
-    let count = 0
-    for (const st of Object.values(s.byId)) if (st?.unread) count++
-    return count
-  })
+  // The app-level unread count (macOS Dock badge, Windows taskbar overlay, tray), across all
+  // projects. Counted over the nodes the projects HOLD, never over the status table alone: that
+  // table outlives nodes deleted by paths that never reach `remove`, and counting it raw showed
+  // a Dock of 20 beside a single tab badge of 1 (lib/unreadBadge.ts). Both selectors return a
+  // primitive, so neither a state flip nor a node serialization re-renders the canvas.
+  const unreadSig = useAgentStatus((s) => unreadIdsSig(s.byId))
+  const unreadSet = useMemo(() => unreadIdSet(unreadSig), [unreadSig])
+  const unreadCount = useProjects((s) => countUnreadInProjects(s.projects, unreadSet))
   useEffect(() => {
+    // Not before the workspace is loaded: with no projects yet the count reads 0, and on Windows
+    // the real count arriving a moment later would read as a RISE and flash the taskbar at boot
+    // (planBadge treats the FIRST report as the baseline).
+    if (!workspaceLoaded) return
     window.nodeTerminal.setBadgeCount(unreadCount)
-  }, [unreadCount])
+  }, [unreadCount, workspaceLoaded])
 
   // Feed per-session context-window fill from main into the transient store.
   useEffect(() => {

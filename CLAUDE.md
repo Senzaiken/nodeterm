@@ -4138,7 +4138,9 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   Settings (`notifyOnClaudeDone`). Selecting, focusing, dwelling into, or opening a session card
   clears `unread` and ACKs the finish across phone/notch surfaces — existing read-on-view behavior.
   This NEVER changes the workflow bucket: read state is independent from agent state.
-  The unread COUNT is the macOS Dock badge, and on **Windows** a taskbar overlay icon (pure
+  The unread COUNT is the macOS Dock badge (counted over nodes some project HOLDS, closed ones
+  included — never over the raw status table, which outlives nodes deleted by paths that skip
+  `remove`; stale entries are swept at load past a 7-day grace, `lib/unreadBadge.ts`), and on **Windows** a taskbar overlay icon (pure
   `planBadge` + BGRA rasterizer `rasterizeBadge`, "9+" above nine, `main/taskbar-badge.ts`) plus a
   `flashFrame` when the count RISES while unfocused (cleared on focus); Linux shows nothing. Windows
   toasts need `app.setAppUserModelId` set before ready to the package.json `build.appId` the NSIS

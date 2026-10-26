@@ -496,3 +496,31 @@ describe('observed Claude account persistence (a plain terminal knows it nowhere
     expect(useAgentStatus.getState().byId).toBe(before)
   })
 })
+
+describe('removeMany (boot sweep of orphaned entries)', () => {
+  it('drops the named entries from both keys in one write each, and ignores unknown ids', async () => {
+    const now = Date.now()
+    const store = memStorage({
+      'nodeterm.agentStatus': JSON.stringify({
+        keep: { unread: true, sessionId: 's1' },
+        gone: { unread: true, sessionId: 's2' }
+      }),
+      'nodeterm.agentStatus.lastSeen': JSON.stringify({ keep: { at: now }, gone: { at: now } })
+    })
+    vi.stubGlobal('localStorage', store)
+    const { useAgentStatus } = await import('./agentStatus')
+    useAgentStatus.getState().removeMany(['gone', 'never-existed'])
+    expect(Object.keys(useAgentStatus.getState().byId)).toEqual(['keep'])
+    expect(Object.keys(JSON.parse(store.getItem('nodeterm.agentStatus')!))).toEqual(['keep'])
+    expect(Object.keys(JSON.parse(store.getItem('nodeterm.agentStatus.lastSeen')!))).toEqual(['keep'])
+  })
+
+  it('is a no-op (same state, no write) when no id is present', async () => {
+    const store = memStorage({ 'nodeterm.agentStatus': JSON.stringify({ keep: { unread: true } }) })
+    vi.stubGlobal('localStorage', store)
+    const { useAgentStatus } = await import('./agentStatus')
+    const before = useAgentStatus.getState().byId
+    useAgentStatus.getState().removeMany(['nope'])
+    expect(useAgentStatus.getState().byId).toBe(before)
+  })
+})

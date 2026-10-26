@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { useProjects } from '../state/projects'
 import { isOmniKanbanEnabled, toggleBoardView, useViewMode, viewFor } from '../state/viewMode'
 import { useAgentStatus } from '../state/agentStatus'
+import { unreadIdSet, unreadIdsSig } from '../lib/unreadBadge'
 import { usePauseCounts } from '../state/pauseCounts'
 import { useSettings } from '../state/settings'
 import { accountsForProject, sshAccountsHint, systemAccountDisplay } from '../state/workspace'
@@ -126,12 +127,8 @@ export function TabBar({
   const highlightedId = useViewMode((s) => s.highlightedSwimlaneId)
   // Unread dots need only the unread id set — subscribing to the whole status map re-rendered
   // the TabBar on every working/waiting flip of any agent. Primitive signature → rare updates.
-  const unreadIds = useAgentStatus((s) => {
-    let ids = ''
-    for (const [id, st] of Object.entries(s.byId)) if (st?.unread) ids += `${id}|`
-    return ids
-  })
-  const unreadSet = useMemo(() => new Set(unreadIds.split('|').filter(Boolean)), [unreadIds])
+  const unreadIds = useAgentStatus((s) => unreadIdsSig(s.byId))
+  const unreadSet = useMemo(() => unreadIdSet(unreadIds), [unreadIds])
   // ⏸ badge + the "Cancel pending pauses" row. Computed HERE, not in Canvas: this component
   // already holds the projects array, and Canvas subscribing to it would re-render the whole canvas
   // on every node serialization.
